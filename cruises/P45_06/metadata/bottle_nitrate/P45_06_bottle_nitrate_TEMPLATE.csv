@@ -1,0 +1,2 @@
+﻿cruise_id,cast_id,station,depth_m,time_utc,nitrate_uM,replicate_id,flag
+e.g. P45_05,e.g. P45_05_CTD_03 (must match a SUNA cast),"optional, e.g. J2","Niskin firing depth in metres (REQUIRED, numeric)",optional ISO datetime of firing; enables time+depth matching,NO3+NO2 in uM (numeric; leave blank if below detection),optional; same value for replicates of one sample,"optional: BDL (below detection), NES (not enough sample), etc."

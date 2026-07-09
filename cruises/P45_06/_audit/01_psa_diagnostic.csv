@@ -1,0 +1,7 @@
+﻿psa,OutputDir,OutputFile,AppendOutputFile,InputDir,warnings
+01_datcnv.psa,,,,,
+02_alignctd.psa,,,,,
+06_loopedit.psa,,,,,
+07_derive.psa,,,,,
+08b_binavg_1m_down.psa,,,,,
+08d_binavg_1s_full.psa,,,,,

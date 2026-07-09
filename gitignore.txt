@@ -1,0 +1,66 @@
+# ============================================================
+# .gitignore for ctd_pipeline_v2
+# Commit CODE, PSAs, docs, config. NEVER commit cruise data.
+# ============================================================
+
+# --- Cruise data (raw + processed) — do NOT version-control ---
+cruises/*/L0/
+cruises/*/L1/
+cruises/*/L2/
+cruises/*/L3/
+cruises/*/_audit/
+cruises/*/_sbe_work/
+_sbe_work/
+
+# raw / processed instrument files anywhere
+*.hex
+*.HEX
+*.cnv
+*.CNV
+*.ros
+*.bl
+*.btl
+*.afm
+*.bin
+*.hdr
+
+# SUNA logs and merged/QC csv outputs (data, not code)
+cruises/**/*.csv
+cruises/**/*.CSV
+
+# figures and plot outputs
+*.png
+*.jpg
+*.jpeg
+*.pdf
+profile_plots/
+
+# --- Environments / caches ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+*.egg-info/
+
+# --- IDE ---
+.idea/
+.vscode/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# EXCEPTIONS — force-keep small reference/config files that
+# would otherwise be caught by the rules above.
+# ============================================================
+# Keep the SUNA cast map and bottle template (small, needed to run)
+!cruises/*/metadata/suna_cast_map.csv
+!cruises/*/metadata/bottle_nitrate/*_bottle_nitrate_TEMPLATE.csv
+# Keep the shared SUNA calibration (small, instrument reference)
+!metadata/calibration/*.cal
+# Keep PSA files (they ARE configuration, not data)
+!psa/*.psa

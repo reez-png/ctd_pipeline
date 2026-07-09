@@ -1,0 +1,7 @@
+﻿module,source_psa,work_psa
+01_datcnv,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\psa\01_datcnv.psa,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\_sbe_work\sbe_psa\01_datcnv.psa
+02_alignctd,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\psa\02_alignctd.psa,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\_sbe_work\sbe_psa\02_alignctd.psa
+06_loopedit,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\psa\06_loopedit.psa,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\_sbe_work\sbe_psa\06_loopedit.psa
+07_derive,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\psa\07_derive.psa,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\_sbe_work\sbe_psa\07_derive.psa
+08b_binavg_1m_down,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\psa\08b_binavg_1m_down.psa,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\_sbe_work\sbe_psa\08b_binavg_1m_down.psa
+08d_binavg_1s_full,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\psa\08d_binavg_1s_full.psa,C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\_sbe_work\sbe_psa\08d_binavg_1s_full.psa

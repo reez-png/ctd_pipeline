@@ -1,0 +1,17 @@
+Profile diagnostics — P45_06_CTD_11
+===================================
+
+  Thermocline                    28.0 m    [Fiedler 2010; Chu & Fan 2019]
+  Halocline                      31.0 m    [gradient diagnostic]
+  Pycnocline                     29.0 m    [Chu & Fan 2019]
+  Oxycline                       74.0 m    [Fiedler 2010; Zhou et al. 2023]
+  DCM (Fmax)                     53.0 m    [Cullen 1982; Falkowski & Kiefer 1985]
+  Nitracline (onset)              n/a
+  Nitracline (max grad)           n/a
+  MLD (temperature, 0.2 C)       22.0 m    [de Boyer Montegut et al. 2004]
+  MLD (density, 0.03 kg/m3)      20.0 m    [de Boyer Montegut et al. 2004]
+
+NOTE: Automated single-profile diagnostics. Cline depths are the location of the
+strongest smoothed gradient (method- and smoothing-dependent); MLD is threshold-based.
+Treat as first-pass guidance, not definitive layer boundaries. Verify against the
+profile shape before scientific use.

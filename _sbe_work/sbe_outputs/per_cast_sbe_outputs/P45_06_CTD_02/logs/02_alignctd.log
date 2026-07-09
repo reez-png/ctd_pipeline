@@ -1,0 +1,14 @@
+Started: 2026-06-17T13:21:07
+Finished: 2026-06-17T13:21:08
+Return code: 0
+Working directory: C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\cruises\P45_06\L1\CTD
+
+Command:
+"C:\Program Files (x86)\Sea-Bird\SBEDataProcessing-Win32\AlignCTDW.exe" /iP45_06_CTD_02.cnv /pC:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\_sbe_work\sbe_psa\02_alignctd.psa /fP45_06_CTD_02_al /oC:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\cruises\P45_06\L2\CTD\Align_CTD /s
+
+STDOUT:
+(empty)
+
+STDERR:
+XML document loaded successfully
+
