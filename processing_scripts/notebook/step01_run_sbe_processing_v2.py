@@ -53,7 +53,7 @@ from pathlib import Path
 # ===========================================================================
 # 1. Project + cruise paths  (v2 = cruise-centric L0/L1/L2/L3)
 # ===========================================================================
-CTD_ROOT     = Path(r"C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd")
+CTD_ROOT     = Path(r"C:\Projects\ctd_pipeline")
 PSA_ROOT     = CTD_ROOT / "psa"
 CRUISES_ROOT = CTD_ROOT / "cruises"
 
@@ -126,10 +126,10 @@ APPLY_FILTER   = False   # Low-pass pressure filter. Off; not in v2 PSA set.
 # ===========================================================================
 # 6. Run-mode safety switches
 # ===========================================================================
-TEST_SINGLE_CAST_ONLY = False
+TEST_SINGLE_CAST_ONLY = True
 TEST_CAST_ID = "P45_06_CTD_01"
 
-RUN_SBE_COMMANDS = True          # dry run first; flip to True after log looks right
+RUN_SBE_COMMANDS = False          # dry run first; flip to True after log looks right
 STOP_ON_ERROR = True
 CLEAN_WORK_FOLDER_FIRST = True
 

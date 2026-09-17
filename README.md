@@ -13,7 +13,7 @@ cruise under an `L0 → L1 → L2 → L3` data-level scheme.
 
 ```bash
 git clone <your-repo-url>
-cd ctd_pipeline_v2/ctd
+cd ctd_pipeline
 python -m venv .venv
 # Windows:
 .venv\Scripts\activate
@@ -48,7 +48,7 @@ L1 is readable but unbinned. (In v1 the binned products were wrongly placed unde
 ## 2. Folder layout (per cruise)
 
 ```text
-ctd_pipeline_v2/ctd/
+ctd_pipeline/
 ├── psa/                              # Sea-Bird PSA setup files (see note below)
 │   ├── 01_datcnv.psa                 # REQUIRED — must be created (see Section 6)
 │   ├── 02_alignctd.psa
@@ -221,9 +221,9 @@ disclaimer.
 
 Community has weak notebook support, so step01 is provided as a plain `.py` script.
 
-1. **Open the project** at the top level: `ctd_pipeline_v2`.
+1. **Open the project** at the top level: `ctd_pipeline` (e.g. `C:\Projects\ctd_pipeline`).
 2. **Create the virtual environment:** Settings → Project → Python Interpreter → Add Interpreter →
-   Add Local Interpreter → Virtualenv → New, location `ctd_pipeline_v2/.venv`, base Python 3.10/3.11.
+   Add Local Interpreter → Virtualenv → New, location `ctd_pipeline/.venv`, base Python 3.10/3.11.
 3. **Install packages** in the PyCharm terminal (prompt must show `(.venv)`):
    ```
    pip install pandas numpy matplotlib openpyxl
@@ -320,7 +320,27 @@ With those in hand, the next cruise is the first fully quality-controlled nitrat
 
 ---
 
-## 10. References
+## 10. Helper tools (standalone utilities)
+
+Beyond the five numbered steps, several standalone scripts support the workflow. Each has settings at
+the top (`CTD_ROOT`, `CRUISE_ID`) and is run directly (`python <script>.py`).
+
+| Script | What it does | When to run |
+|--------|--------------|-------------|
+| `build_bottle_table.py` | Pairs discrete nutrient bottle samples to CTD/SUNA casts by time, with a stated confidence and reason per pairing. Writes `<CRUISE>_bottle_pairing_audit.csv` (the reasoning trail) and the step03-ready `<CRUISE>_bottle_nitrate.csv` (usable bottles only). | After the nutrient lab data arrives, before step03. |
+| `step03_run_report.py` | Reads the CSVs step03 writes and produces one readable `<CRUISE>_step03_run_report.txt`: bottle count and nitrate-range coverage, RMSE progression, per-cast medians, fit coefficients, and a plain-language provisional/OK verdict. | After step03. |
+| `combine_readable_profiles.py` | Stacks step04's per-cast `<cast>_readable.csv` files into one cruise-wide `combined_all_casts_final_1m_down_profiles.csv` for a merge tool or section plots. | After step04, when a combined table is needed. |
+| `fix_psa_output_paths.py` | Blanks hardcoded OutputDir/OutputFile/NameAppend in the PSAs so the runner's CLI flags control output. | Once, or after re-saving any PSA from the SBE GUI. |
+
+**Pairing note:** field logsheets identify samples by station (J1, J2, ...), not by the CTD cast number
+assigned later in processing. `build_bottle_table.py` links them by matching each station's sample time
+to each cast's `.cnv` start_time, records the confidence (high < 20 min, medium < 90 min) and reason,
+and flags medium-confidence pairings in the bottle table for review. This makes the crosswalk auditable
+rather than hand-entered.
+
+---
+
+## 11. References
 
 - Sakamoto, C. M., Johnson, K. S., & Coletti, L. J. (2009). Improved algorithm for nitrate from a UV
   spectrophotometer. *Limnol. Oceanogr.: Methods, 7,* 132–143.

@@ -10,7 +10,7 @@
 ## 1. File location and name
 
 ```text
-ctd_pipeline_v2/ctd/cruises/<CRUISE_ID>/metadata/bottle_nitrate/<CRUISE_ID>_bottle_nitrate.csv
+ctd_pipeline/cruises/<CRUISE_ID>/metadata/bottle_nitrate/<CRUISE_ID>_bottle_nitrate.csv
 ```
 
 Example: `cruises/P45_05/metadata/bottle_nitrate/P45_05_bottle_nitrate.csv`

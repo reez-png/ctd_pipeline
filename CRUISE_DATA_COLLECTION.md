@@ -5,7 +5,7 @@ the project, and how to name it, so the data drops straight into the processing 
 This is the collection reference; for processing see `README.md`.
 
 Replace `<CRUISE>` below with the cruise id, e.g. `P45_07`. All paths are under
-`ctd_pipeline_v2\ctd\cruises\<CRUISE>\`.
+`ctd_pipeline\cruises\<CRUISE>\`.
 
 ---
 
