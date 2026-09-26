@@ -10,7 +10,12 @@ cruises/*/L2/
 cruises/*/L3/
 cruises/*/_audit/
 cruises/*/_sbe_work/
+
+# Sea-Bird no-space staging area, including the timestamped fallback folders
+# the runner creates when the default one is locked (_sbe_work_YYYYMMDD_HHMMSS).
 _sbe_work/
+_sbe_work_*/
+_audit/
 
 # raw / processed instrument files anywhere
 *.hex
@@ -37,6 +42,7 @@ profile_plots/
 
 # --- Environments / caches ---
 .venv/
+.venv_new/
 venv/
 env/
 __pycache__/
@@ -64,3 +70,7 @@ desktop.ini
 !metadata/calibration/*.cal
 # Keep PSA files (they ARE configuration, not data)
 !psa/*.psa
+
+# ...but NOT the auto-generated bottle DatCnv PSA — step01 derives it from
+# 01_datcnv.psa on demand (and self-heals it), so it should not be tracked.
+psa/01_datcnv_bottles.psa
