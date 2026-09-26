@@ -1,6 +1,6 @@
 # ============================================================
 # .gitignore for ctd_pipeline_v2
-# Commit CODE, PSAs, docs, config. NEVER commit cruise data.
+# Commit CODE, docs, config. NEVER commit cruise data or PSAs.
 # ============================================================
 
 # --- Cruise data (raw + processed) — do NOT version-control ---
@@ -28,6 +28,9 @@ _audit/
 *.afm
 *.bin
 *.hdr
+
+# Sea-Bird PSA setup files — not tracked (local configuration)
+*.psa
 
 # SUNA logs and merged/QC csv outputs (data, not code)
 cruises/**/*.csv
@@ -68,9 +71,3 @@ desktop.ini
 !cruises/*/metadata/bottle_nitrate/*_bottle_nitrate_TEMPLATE.csv
 # Keep the shared SUNA calibration (small, instrument reference)
 !metadata/calibration/*.cal
-# Keep PSA files (they ARE configuration, not data)
-!psa/*.psa
-
-# ...but NOT the auto-generated bottle DatCnv PSA — step01 derives it from
-# 01_datcnv.psa on demand (and self-heals it), so it should not be tracked.
-psa/01_datcnv_bottles.psa
