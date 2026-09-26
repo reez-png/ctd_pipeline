@@ -2,15 +2,15 @@
 <Data_Conversion >
   <Version value="7.26.7.129" />
   <ServerName value="Data Conversion" />
-  <InstrumentPath value="C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd\metadata\calibration\19-8460.xmlcon" />
+  <InstrumentPath value="C:\Projects\ctd_pipeline\metadata\calibration\19-8460.xmlcon" />
   <InstrumentMatch value="0" />
-  <InputDir value="" />
+  <InputDir value="C:\Projects\ctd_pipeline\cruises\P45_06\L0\CTD" />
   <InputFileArray size="1" GrowBy="-1" >
     <ArrayItem index="0" value="P45_06_CTD_01.hex" />
   </InputFileArray>
-  <OutputDir value="" />
+  <OutputDir value="C:\Projects\ctd_pipeline\cruises\P45_06\L1\CTD" />
   <NameAppend value="" />
-  <OutputFile value="" />
+  <OutputFile value="P45_06_CTD_01" />
   <LastProcessed value="0" />
   <ProcessScansToEnd value="1" />
   <ScansToSkip value="0" />
@@ -19,7 +19,7 @@
   <OutputFormat value="0" high="1" low="0" initialValue="0" />
   <FromCast value="0" high="1" low="0" initialValue="0" />
   <CreateFile value="0" high="2" low="0" initialValue="0" />
-  <ScanRangeSource value="3" high="3" low="0" initialValue="3" />
+  <ScanRangeSource value="0" high="3" low="0" initialValue="3" />
   <ScanRangeOffset value="0.000000" />
   <ScanRangeDuration value="2.000000" />
   <StartTimeOption value="2" />
@@ -77,7 +77,7 @@
         <FullName value="Oxygen, SBE 43 [umol/l]" />
         <WindowSize value="2.000000" />
         <ApplyHysteresisCorrection value="1" />
-        <ApplyTauCorrection value="1" />
+        <ApplyTauCorrection value="0" />
       </Calc>
     </CalcArrayItem>
   </CalcArray>
@@ -90,7 +90,7 @@
     <Oxygen >
       <WindowSize value="2.000000" />
       <ApplyHysteresisCorrection value="1" />
-      <ApplyTauCorrection value="1" />
+      <ApplyTauCorrection value="0" />
     </Oxygen>
     <AverageSoundVelocity >
       <MinimumPressure value="20.000000" />

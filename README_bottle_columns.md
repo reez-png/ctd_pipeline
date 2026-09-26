@@ -92,14 +92,19 @@ If you used the SBE 55 ECO auto-fire sampler, the `.afm` file it produces (one p
 each bottle: **bottle number, firing time, and firing pressure in decibars** (the 19plus V2 transmits
 pressure in dbar to the auto-fire module). This directly supplies the `depth_m` and `time_utc` columns.
 
-**Recommended path — use SBE Bottle Summary, not a hand parser:**
+**Easiest path — let step01 do the Bottle Summary for you.** Put each cast's `.afm` beside its `.hex`
+in `L0\CTD\` (same base name) and run step01 with `APPLY_BOTTLES = True`. If `psa\10_bottlesum.psa` is
+present, step01 runs Data Conversion in "Create both data and bottle file" mode and then **SBE Bottle
+Summary**, writing a calibrated `L2\CTD\Bottle\<cast>.btl` (pressure, T, S at each firing). Read
+`depth_m` / `time_utc` from that `.btl`.
+
+**Manual path (equivalent):**
 1. Run the `.afm` files through **SBE Data Processing → Bottle Summary** (the same GUI used for CTD
-   processing). It converts the firing records into a calibrated table with pressure, temperature, and
-   salinity at each firing, using the instrument config file.
+   processing). It converts the firing records into a calibrated table using the instrument config file.
 2. Read the firing pressure/depth and time from that output into `depth_m` / `time_utc`.
 3. Join the lab nitrate values by **bottle number** to fill `nitrate_uM`.
 
-This avoids reverse-engineering the raw `.afm` hex format and uses Sea-Bird's validated conversion.
+Either way avoids reverse-engineering the raw `.afm` hex format and uses Sea-Bird's validated conversion.
 
 Note: the `.afm` does **not** contain nitrate — it is firing geometry only. Nitrate always comes from
 the lab, joined by bottle number.
