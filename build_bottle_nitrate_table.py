@@ -69,22 +69,43 @@ def _find_col(names: List[str], *cands: str) -> Optional[int]:
     return None
 
 
+def _btl_column_names(raw_lines: List[str]) -> List[str]:
+    """Variable names from the .btl two-row title header.
+
+    SBE Bottle Summary writes columns as a title row, not '# name N =' lines, e.g.:
+        '    Bottle        Date      Sal00       PrDM     Tv290C      C0S/m    Sbeox0V'
+        '  Position        Time'
+    The variable names are the tokens after 'Bottle' and 'Date'."""
+    for ln in raw_lines:
+        toks = ln.split()
+        if len(toks) >= 3 and toks[0].lower() == "bottle" and toks[1].lower() == "date":
+            return toks[2:]
+    return []
+
+
 def parse_btl(path: Path) -> Tuple[List[str], List[dict]]:
     """Parse one SBE Bottle Summary .btl into (column_names, list-of-bottle-dicts).
 
     Handles the standard 2-line-per-bottle layout: the mean line begins with the bottle
     number followed by 'Mon DD YYYY' and the per-variable means; the next line carries
-    'HH:MM:SS' and the standard deviations. Column identities come from the '# name N ='
-    header lines (inherited from the source .cnv)."""
+    'HH:MM:SS' and the standard deviations. Column identities come from the 'Bottle ...
+    Date ...' title row (SBE Bottle Summary format), falling back to any '# name N ='
+    header lines a different SBE build might inherit from the source .cnv."""
     raw = path.read_text(encoding="latin-1", errors="replace").splitlines()
-    header = [ln for ln in raw if ln.strip().startswith("#") or ln.strip().startswith("*")]
-    names = L.cnv_column_names(header)
+    names = _btl_column_names(raw)
     if not names:
-        raise ValueError(f"{path.name}: no '# name N =' columns found; cannot map .btl variables.")
+        header = [ln for ln in raw if ln.strip().startswith("#") or ln.strip().startswith("*")]
+        names = L.cnv_column_names(header)
+    if not names:
+        raise ValueError(f"{path.name}: could not identify columns "
+                         "(no 'Bottle ... Date' title row and no '# name N =' lines).")
     nq = len(names)
     pcol = L.cnv_pressure_column(names)
     tcol = _find_col(names, "t090c", "tv290c", "t090", "tv290", "t68", "t090cm")
     scol = _find_col(names, "sal00", "sal11", "sal78", "sal")
+    ccol = _find_col(names, "c0s/m", "c1s/m", "c0ms/cm", "c1ms/cm", "cond0s/m", "cond", "c0")
+    # conductivity unit: c0S/m is S/m (what practical_salinity wants); c0mS/cm is mS/cm (/10 -> S/m)
+    c_to_Sm = 0.1 if (ccol is not None and "ms/cm" in names[ccol].strip().lower()) else 1.0
 
     records: List[dict] = []
     for idx, ln in enumerate(raw):
@@ -119,13 +140,25 @@ def parse_btl(path: Path) -> Tuple[List[str], List[dict]]:
         time_utc = f"{date_iso}T{time_str}" if (date_iso and time_str) else ""
 
         press = vals[pcol] if pcol is not None else float("nan")
+        temp = vals[tcol] if tcol is not None else float("nan")
+        # salinity: use the .btl column if present; otherwise compute from averaged C, T, P
+        # (PSS-78 via ctd_lib) so a Bottle Summary without a derived-salinity column still works
+        if scol is not None:
+            sal = vals[scol]
+            sal_src = "btl"
+        elif ccol is not None and tcol is not None and pcol is not None and press == press and temp == temp:
+            sal = float(L.practical_salinity(vals[ccol] * c_to_Sm, temp, press))
+            sal_src = "computed"
+        else:
+            sal, sal_src = float("nan"), ""
         rec = {
             "bottle_no": bottle_no,
             "pressure_dbar": press,
             "depth_m": round(float(L.pressure_to_depth(press, LATITUDE)), 2) if press == press else "",
             "time_utc": time_utc,
-            "temp_c": round(vals[tcol], 4) if tcol is not None else "",
-            "salinity": round(vals[scol], 4) if scol is not None else "",
+            "temp_c": round(temp, 4) if temp == temp else "",
+            "salinity": round(sal, 4) if sal == sal else "",
+            "salinity_source": sal_src,
         }
         records.append(rec)
     return names, records
@@ -150,7 +183,7 @@ def build_ctd_bottle_table(bottle_dir: Path) -> pd.DataFrame:
             rows.append(r)
         print(f"  {b.name}: {len(recs)} bottle(s)")
     df = pd.DataFrame(rows, columns=["cast_id", "bottle_no", "pressure_dbar", "depth_m",
-                                     "time_utc", "temp_c", "salinity"])
+                                     "time_utc", "temp_c", "salinity", "salinity_source"])
     return df
 
 
