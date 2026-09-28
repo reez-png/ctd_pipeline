@@ -209,8 +209,22 @@ def main() -> int:
     print(f"\nCTD bottle table: {len(ctd)} rows -> {ctd_path}")
 
     if LAB_FILE is None:
-        print("\nNo LAB_FILE set — CTD-side table only. Add lab nitrate (keyed by cast_id + "
-              "bottle_no) and set LAB_FILE to also produce the step03 bottle_nitrate table.")
+        # Emit a lab-nitrate template pre-keyed with every bottle, so whoever runs the
+        # nitrate fills values into a sheet whose (cast_id, bottle_no) keys already match
+        # the .btl exactly -> the join later matches 100%. depth_m/time_utc are carried
+        # through as read-only context to help identify each sample; only nitrate_uM (and
+        # optionally replicate_id/station/flag) need filling.
+        template = ctd[["cast_id", "bottle_no", "depth_m", "time_utc"]].copy()
+        template["nitrate_uM"] = ""
+        template["replicate_id"] = ""
+        template["station"] = ""
+        template["flag"] = ""
+        tmpl_path = OUTPUT_DIR / f"{CRUISE_ID}_lab_nitrate_TEMPLATE.csv"
+        template.to_csv(tmpl_path, index=False, encoding="utf-8-sig")
+        print(f"\nLab-nitrate template ({len(template)} bottles) -> {tmpl_path}")
+        print("Fill the nitrate_uM column (and replicate_id/station/flag if used), save it, then set "
+              "LAB_FILE to that file and rerun to build the step03 bottle_nitrate table.")
+        print("\nNo LAB_FILE set — CTD-side table only for now.")
         return 0
 
     lab_path = Path(LAB_FILE)

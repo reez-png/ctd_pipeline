@@ -63,6 +63,75 @@ def test_time_from_sdev_line(tmp_path):
     assert recs[1]["time_utc"] == "2026-08-07T15:23:26"
 
 
+def _btl_file(dirpath, cast, bottles):
+    """Write a minimal real-format .btl. bottles: {no: (pressure, temp, salinity)}."""
+    hdr = ("* Sea-Bird SBE19plus  Data File:\r\n# interval = seconds: 0.25\r\n"
+           "    Bottle        Date      Sal00       PrdM     Tv290C      C0S/m    Sbeox0V\r\n"
+           "  Position        Time\r\n")
+    body = ""
+    for n, (p, t, s) in bottles.items():
+        body += f"      {n}    Aug 07 2026    {s:.4f}     {p:.3f}    {t:.4f}   4.800000     1.5000 (avg)\r\n"
+        body += f"              15:2{n}:16                 0.400     0.0040   0.000300     0.0070 (sdev)\r\n"
+    (dirpath / f"{cast}.btl").write_bytes((hdr + body).encode("latin-1"))
+
+
+def test_lab_join_matches_and_reports_unmatched(tmp_path, monkeypatch):
+    """The lab-join branch: matched bottles carry nitrate; unmatched (both directions)
+    are blanked in the product and listed in the UNMATCHED report."""
+    import pandas as pd
+
+    bdir = tmp_path / "Bottle"; bdir.mkdir()
+    _btl_file(bdir, "P45_07_CTD_02", {1: (36.4, 19.5, 35.77), 2: (30.1, 19.6, 35.80)})
+    _btl_file(bdir, "P45_07_CTD_03", {1: (15.7, 20.9, 35.79), 2: (14.6, 21.0, 35.82)})
+
+    lab = pd.DataFrame({
+        "cast_id":    ["P45_07_CTD_02", "P45_07_CTD_02", "P45_07_CTD_03", "P45_07_CTD_99"],
+        "bottle_no":  [1, 2, 1, 5],          # last row: lab sample with no matching bottle
+        "nitrate_uM": [0.42, 1.10, 3.55, 9.9],
+        "station":    ["S1", "S1", "S2", "SX"],
+        "flag":       [2, 2, 2, 2],
+    })
+    labf = tmp_path / "lab.csv"; lab.to_csv(labf, index=False)
+    out = tmp_path / "out"; out.mkdir()
+
+    monkeypatch.setattr(B, "BOTTLE_DIR", bdir)
+    monkeypatch.setattr(B, "OUTPUT_DIR", out)
+    monkeypatch.setattr(B, "LAB_FILE", labf)
+    monkeypatch.setattr(B.sys, "argv", ["build_bottle_nitrate_table.py"])  # no CLI arg
+
+    assert B.main() == 0
+
+    nit = pd.read_csv(out / "P45_07_bottle_nitrate.csv")
+    assert len(nit) == 4
+    assert int(nit["nitrate_uM"].notna().sum()) == 3          # 3 of 4 matched
+    # the unmatched bottle (CTD_03, bottle 2) has no nitrate
+    unmatched_row = nit[nit["nitrate_uM"].isna()]
+    assert len(unmatched_row) == 1
+
+    report = (out / "P45_07_bottle_nitrate_UNMATCHED.csv").read_text()
+    assert "P45_07_CTD_03,2" in report      # bottle with no lab
+    assert "P45_07_CTD_99,5" in report      # lab row with no bottle
+
+
+def test_lab_template_emitted_without_lab_file(tmp_path, monkeypatch):
+    """With no LAB_FILE, a pre-keyed lab template is written for every bottle."""
+    import pandas as pd
+    bdir = tmp_path / "Bottle"; bdir.mkdir()
+    _btl_file(bdir, "P45_07_CTD_02", {1: (36.4, 19.5, 35.77), 2: (30.1, 19.6, 35.80)})
+    out = tmp_path / "out"; out.mkdir()
+    monkeypatch.setattr(B, "BOTTLE_DIR", bdir)
+    monkeypatch.setattr(B, "OUTPUT_DIR", out)
+    monkeypatch.setattr(B, "LAB_FILE", None)
+    monkeypatch.setattr(B.sys, "argv", ["build_bottle_nitrate_table.py"])
+
+    assert B.main() == 0
+    tmpl = pd.read_csv(out / "P45_07_lab_nitrate_TEMPLATE.csv")
+    assert list(tmpl.columns) == ["cast_id", "bottle_no", "depth_m", "time_utc",
+                                  "nitrate_uM", "replicate_id", "station", "flag"]
+    assert len(tmpl) == 2
+    assert list(tmpl["bottle_no"]) == [1, 2]
+
+
 def test_salinity_computed_when_absent(tmp_path):
     # A .btl WITHOUT a salinity column but with C, T, P -> salinity is computed (PSS-78)
     no_sal = _REAL_BTL.replace(

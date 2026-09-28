@@ -42,9 +42,16 @@ DatCnv → Filter → Align CTD → Cell Thermal Mass → Section (python) → L
   produces `<cast>.cnv` and `<cast>.ros`. The file self-heals if a stale `CreateFile != 2` is found.
 - `.afm` staged beside the `.hex` by matching basename. Casts with no `.afm` fall back to the
   profile PSA automatically (`.cnv` only).
-- Bottle Summary (`10_bottlesum.psa`, if present) → `L2/CTD/Bottle/<cast>.btl`.
-- `build_bottle_nitrate_table.py` parses the `.btl` files (+ optional lab nitrate joined on
-  `cast_id` + `bottle_no`) into `<CRUISE>_bottle_ctd.csv` and the step03 `<CRUISE>_bottle_nitrate.csv`.
+- Bottle Summary (`10_bottlesum.psa`) → `L2/CTD/Bottle/<cast>.btl`. Averaged variables: pressure,
+  temperature, conductivity, SBE 43 oxygen (mean + std per bottle firing). Salinity is deliberately
+  **not** in the PSA; it is computed downstream (next line) from the averaged C, T, P.
+- `build_bottle_nitrate_table.py` parses the `.btl` files (columns read from the `Bottle ... Date`
+  title row) into `<CRUISE>_bottle_ctd.csv`. With no `LAB_FILE` it also writes
+  `<CRUISE>_lab_nitrate_TEMPLATE.csv`, pre-keyed with every bottle so the lab fills only `nitrate_uM`.
+  With a filled `LAB_FILE` (joined on `cast_id` + `bottle_no`) it writes the step03
+  `<CRUISE>_bottle_nitrate.csv` plus an `_UNMATCHED.csv` for bottles/lab rows that did not pair.
+  If the `.btl` has no salinity column it computes practical salinity (PSS-78) from the averaged
+  conductivity/temperature/pressure via `ctd_lib`, tagging each row `salinity_source` = `btl` or `computed`.
 
 ## Runtime / safety
 
