@@ -1,6 +1,6 @@
 # ============================================================
 # .gitignore for ctd_pipeline_v2
-# Commit CODE, PSAs, docs, config. NEVER commit cruise data.
+# Commit CODE, docs, config. NEVER commit cruise data or PSAs.
 # ============================================================
 
 # --- Cruise data (raw + processed) — do NOT version-control ---
@@ -10,7 +10,12 @@ cruises/*/L2/
 cruises/*/L3/
 cruises/*/_audit/
 cruises/*/_sbe_work/
+
+# Sea-Bird no-space staging area, including the timestamped fallback folders
+# the runner creates when the default one is locked (_sbe_work_YYYYMMDD_HHMMSS).
 _sbe_work/
+_sbe_work_*/
+_audit/
 
 # raw / processed instrument files anywhere
 *.hex
@@ -23,6 +28,9 @@ _sbe_work/
 *.afm
 *.bin
 *.hdr
+
+# Sea-Bird PSA setup files — not tracked (local configuration)
+*.psa
 
 # SUNA logs and merged/QC csv outputs (data, not code)
 cruises/**/*.csv
@@ -37,6 +45,7 @@ profile_plots/
 
 # --- Environments / caches ---
 .venv/
+.venv_new/
 venv/
 env/
 __pycache__/
@@ -62,5 +71,3 @@ desktop.ini
 !cruises/*/metadata/bottle_nitrate/*_bottle_nitrate_TEMPLATE.csv
 # Keep the shared SUNA calibration (small, instrument reference)
 !metadata/calibration/*.cal
-# Keep PSA files (they ARE configuration, not data)
-!psa/*.psa
