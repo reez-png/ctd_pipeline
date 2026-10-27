@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "OMI CTD + SUNA Processing Pipeline"
+abstract: >-
+  Cruise-centric processing, quality control, and calibration pipeline for Sea-Bird CTD casts and
+  rosette-mounted SUNA nitrate, with discrete-sample productivity calibration (chlorophyll
+  fluorescence against extracted chlorophyll-a; a dormant SBE 43 versus Winkler oxygen path), for
+  the Ghana shelf, Gulf of Guinea.
+type: software
+authors:
+  - family-names: "Edusei"
+    given-names: "Maurice Oti"
+    affiliation: "Department of Marine and Fisheries Sciences, University of Ghana; Ocean Margins Initiative"
+    orcid: "https://orcid.org/REPLACE-WITH-YOUR-ORCID"
+  # Add co-authors here only with their agreement, for example:
+  # - family-names: "Marrec"
+  #   given-names: "Pierre"
+  #   affiliation: "..."
+  #   orcid: "https://orcid.org/..."
+  # - family-names: "Lucas"
+  #   given-names: "Andrew"
+  #   affiliation: "..."
+  #   orcid: "https://orcid.org/..."
+version: "0.1.0"
+date-released: "2026-10-27"
+license: MIT
+repository-code: "https://github.com/reez-png/ctd_pipeline"
+keywords:
+  - oceanography
+  - CTD
+  - SUNA
+  - nitrate
+  - chlorophyll
+  - ocean acidification
+  - Gulf of Guinea
+  - Ghana shelf
