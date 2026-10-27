@@ -11,6 +11,29 @@ cruise under an `L0 → L1 → L2 → L3` data-level scheme.
 
 ---
 
+## Quickstart
+
+Clone and install, then run the synthetic example end to end, no cruise data required:
+
+```bash
+git clone https://github.com/reez-png/ctd_pipeline.git
+cd ctd_pipeline
+python -m venv .venv
+.venv\Scripts\activate          # Windows (macOS/Linux: source .venv/bin/activate)
+pip install -r requirements.txt
+jupyter notebook
+```
+
+In the notebooks set `CRUISE_ID = "_EXAMPLE"` and run, in order: `suna/step00_suna_inventory`,
+`suna/step01_suna_spectral_qc`, `step02_merge_ctd_suna`, `step03_nitrate_qc`, and
+`productivity/step07_productivity_calibration`. The expected numbers are in
+`cruises/_EXAMPLE/README_EXAMPLE.md` and `docs/VALIDATION.md`. step01 (Sea-Bird processing) is skipped
+for the example, which ships step01's outputs so you start at the merge. For your own cruise, copy
+`cruises/_TEMPLATE/` to `cruises/<CRUISE_ID>/`, drop your data in, and set `CRUISE_ID`; all paths
+resolve through `project_paths.py`.
+
+---
+
 ## Data availability
 
 This repository contains the processing code only. The cruise measurements it operates on, the raw CTD
@@ -26,7 +49,7 @@ pipeline can be run on any comparably formatted cruise.
 ## Installation
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/reez-png/ctd_pipeline.git
 cd ctd_pipeline
 python -m venv .venv
 # Windows:
@@ -36,8 +59,12 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-For CTD processing (step01) you also need Sea-Bird **SBE Data Processing** installed (Windows) — the
-pipeline calls its executables. steps 02–05 are pure Python.
+Developed and tested on Python 3.14; the test suite also runs on Python 3.10 to 3.12 in CI.
+`requirements.txt` lists the minimum versions; `requirements-lock.txt` pins the exact tested environment
+for reproducing published results.
+
+For CTD processing (step01) you also need Sea-Bird **SBE Data Processing** installed (Windows); the
+pipeline calls its executables. Steps 02 to 07 are pure Python.
 
 To run the test suite (optional, for anyone modifying `ctd_lib.py`): `pip install pytest` then
 `pytest -q` from the project root.
