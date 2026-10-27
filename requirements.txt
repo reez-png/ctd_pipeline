@@ -1,0 +1,14 @@
+# Python dependencies for ctd_pipeline
+# Install with:  pip install -r requirements.txt
+pandas>=1.5
+numpy>=1.23
+matplotlib>=3.6
+openpyxl>=3.1
+# Optional (only for running the .ipynb notebooks in a browser):
+# jupyter>=1.0
+# nbformat>=5.7
+# Optional (interactive explorers and QC/audit notebooks):
+#   ipywidgets>=8.0   # interactive explorers in step04, step05, step06 and step07, plus step00b/step00d
+#                     # and the SUNA QA (step01_suna, step03_suna); notebooks fall back to static figures without it
+#   ipympl>=0.9       # live zoomable matplotlib canvas for those explorers
+#   scipy>=1.9        # exact Mann-Whitney / Wilcoxon / Spearman in step00e (a numpy fallback runs without it)
