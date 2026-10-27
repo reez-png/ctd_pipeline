@@ -1,5 +1,7 @@
 # OMI CTD + SUNA Processing Pipeline (v2)
 
+![tests](https://github.com/reez-png/ctd_pipeline/actions/workflows/tests.yml/badge.svg)
+
 Cruise-centric processing of Sea-Bird CTD casts and rosette-mounted SUNA nitrate, following the
 June 2026 OMI specification (Marrec / Lucas) and the SUNA quality-control method of
 Zheng et al. (2024).
