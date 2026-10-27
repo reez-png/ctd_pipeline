@@ -29,6 +29,10 @@ then keep everything from there to the end of the record (descent + upcast).
 Because SBE Loop Edit reads a .cnv file, we write the sectioned cast to a temporary .cnv, preserving
 the original header, then run Loop Edit on it.
 
+This is a LOCAL diagnostic script, not a unit test: it runs the Sea-Bird software on real cruise
+data. The executable part is under `if __name__ == "__main__":` so pytest can import the module
+without launching Sea-Bird (so CI, and any machine without SBE, are unaffected).
+
 USAGE: python test_loopedit_sectioned.py
 """
 from pathlib import Path
@@ -44,7 +48,7 @@ ALIGN_DIR= CTD_ROOT / "cruises" / CRUISE / "L2" / "CTD" / "Align_CTD"
 FILTER_PSA          = PSA_DIR / "05_filter.psa"
 LOOPEDIT_PCTMEAN    = PSA_DIR / "06a_loopedit_percentmean.psa"
 LOOPEDIT_FIXEDMIN   = PSA_DIR / "06b_loopedit_fixedmin.psa"
-WORK     = CTD_ROOT / "_sbe_work" / "qc"; WORK.mkdir(parents=True, exist_ok=True)
+WORK     = CTD_ROOT / "_sbe_work" / "qc"
 
 # Motion-based descent-onset detection (must match step00b_qc_filter_loopedit.ipynb).
 DESCENT_SMOOTH_SCANS = 24     # ~1 s median smoothing at 24 Hz, to beat pressure noise
@@ -126,37 +130,43 @@ def flag_pct(cnv):
     return 100 * f.mean(), int(f.sum()), len(data)
 
 
-print(f"{'cast':<16} {'method':<14} {'full raw cast':>16} {'sectioned':>16} {'sect. downcast':>16}")
-print("-" * 82)
-for cast in CASTS:
-    aligned = ALIGN_DIR / f"{cast}_al.cnv"
-    if not aligned.exists():
-        print(f"{cast}: no aligned cnv"); continue
-    filt = run("FilterW.exe", FILTER_PSA, aligned, f"{cast}_filt")
-    src = filt if filt else aligned
+def main():
+    WORK.mkdir(parents=True, exist_ok=True)
+    print(f"{'cast':<16} {'method':<14} {'full raw cast':>16} {'sectioned':>16} {'sect. downcast':>16}")
+    print("-" * 82)
+    for cast in CASTS:
+        aligned = ALIGN_DIR / f"{cast}_al.cnv"
+        if not aligned.exists():
+            print(f"{cast}: no aligned cnv"); continue
+        filt = run("FilterW.exe", FILTER_PSA, aligned, f"{cast}_filt")
+        src = filt if filt else aligned
 
-    # section the FILTERED cnv two ways, both with the leading soak + equilibration dip removed:
-    #   sect  = descent onset -> end of record (downcast + upcast)
-    #   dcast = descent onset -> bottom          (descent only)
-    _, cols, data, _ = read_cnv_full(src)
-    pcol = pcol_of(cols)
-    pv = pd.to_numeric(data[pcol], errors="coerce").to_numpy(float)
-    start = descent_start(pv); imax = int(np.nanargmax(pv)); end = len(pv) - 1
-    sect  = write_sectioned_cnv(src, WORK / f"{cast}_sect.cnv",  start, end)
-    dcast = write_sectioned_cnv(src, WORK / f"{cast}_dcast.cnv", start, imax)
+        # section the FILTERED cnv two ways, both with the leading soak + equilibration dip removed:
+        #   sect  = descent onset -> end of record (downcast + upcast)
+        #   dcast = descent onset -> bottom          (descent only)
+        _, cols, data, _ = read_cnv_full(src)
+        pcol = pcol_of(cols)
+        pv = pd.to_numeric(data[pcol], errors="coerce").to_numpy(float)
+        start = descent_start(pv); imax = int(np.nanargmax(pv)); end = len(pv) - 1
+        sect  = write_sectioned_cnv(src, WORK / f"{cast}_sect.cnv",  start, end)
+        dcast = write_sectioned_cnv(src, WORK / f"{cast}_dcast.cnv", start, imax)
 
-    for label, psa in [("percent-mean", LOOPEDIT_PCTMEAN), ("fixed-min", LOOPEDIT_FIXEDMIN)]:
-        outs = {k: run("LoopEditW.exe", psa, v, f"{cast}_le_{k}")
-                for k, v in (("full", src), ("sect", sect), ("dcast", dcast))}
-        def fmt(o):
-            r = flag_pct(o) if o else None
-            return f"{r[0]:.1f}% ({r[1]}/{r[2]})" if r else "n/a"
-        print(f"{cast:<16} {label:<14} {fmt(outs['full']):>16} {fmt(outs['sect']):>16} {fmt(outs['dcast']):>16}")
+        for label, psa in [("percent-mean", LOOPEDIT_PCTMEAN), ("fixed-min", LOOPEDIT_FIXEDMIN)]:
+            outs = {k: run("LoopEditW.exe", psa, v, f"{cast}_le_{k}")
+                    for k, v in (("full", src), ("sect", sect), ("dcast", dcast))}
+            def fmt(o):
+                r = flag_pct(o) if o else None
+                return f"{r[0]:.1f}% ({r[1]}/{r[2]})" if r else "n/a"
+            print(f"{cast:<16} {label:<14} {fmt(outs['full']):>16} {fmt(outs['sect']):>16} {fmt(outs['dcast']):>16}")
 
-print("\n'sectioned'      = Loop Edit on the cast with only the leading soak + equilibration dip")
-print("                   removed (downcast AND upcast kept) - the real pipeline input.")
-print("'sect. downcast' = same, but the upcast is also removed (descent only) - the clean-descent")
-print("                   diagnostic, and effectively what Bin Average keeps as the downcast.")
-print("Sectioning FIRST stops the dip from poisoning Loop Edit's running max-pressure and wrongly")
-print("flagging the top of the descent. The upcast is flagged by design, so 'sectioned' stays high")
-print("while 'sect. downcast' is the low, meaningful number.")
+    print("\n'sectioned'      = Loop Edit on the cast with only the leading soak + equilibration dip")
+    print("                   removed (downcast AND upcast kept) - the real pipeline input.")
+    print("'sect. downcast' = same, but the upcast is also removed (descent only) - the clean-descent")
+    print("                   diagnostic, and effectively what Bin Average keeps as the downcast.")
+    print("Sectioning FIRST stops the dip from poisoning Loop Edit's running max-pressure and wrongly")
+    print("flagging the top of the descent. The upcast is flagged by design, so 'sectioned' stays high")
+    print("while 'sect. downcast' is the low, meaningful number.")
+
+
+if __name__ == "__main__":
+    main()
