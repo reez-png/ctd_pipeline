@@ -30,8 +30,11 @@ _audit/
 *.hdr
 *.sed
 
-# Sea-Bird PSA setup files - not tracked (local configuration)
+# Sea-Bird PSA setup files - not tracked (local configuration).
+# Ignore the whole psa/ folder and both cases, so nothing in it can be committed.
 *.psa
+*.PSA
+psa/a
 
 # Tabular data files ANYWHERE (not only under cruises/). A public repo is unforgiving,
 # so ignore every spreadsheet/table by default and force-keep only templates below.
