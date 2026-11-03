@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # .gitignore for ctd_pipeline_v2  (PUBLIC repo)
 # Commit CODE, docs, config. NEVER commit cruise data or PSAs.
 # ============================================================
@@ -34,7 +34,7 @@ _audit/
 # Ignore the whole psa/ folder and both cases, so nothing in it can be committed.
 *.psa
 *.PSA
-psa/a
+psa/
 
 # Tabular data files ANYWHERE (not only under cruises/). A public repo is unforgiving,
 # so ignore every spreadsheet/table by default and force-keep only templates below.
