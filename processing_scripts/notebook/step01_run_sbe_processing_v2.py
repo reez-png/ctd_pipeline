@@ -171,8 +171,8 @@ AFM_FILE_PATTERNS  = ["*.afm", "*.AFM"]
 TEST_SINGLE_CAST_ONLY = False
 TEST_CAST_ID = "P45_06_CTD_01"
 
-RUN_SBE_COMMANDS = False          # dry run first; flip to True after log looks right
-STOP_ON_ERROR = True
+RUN_SBE_COMMANDS = True          # dry run first; flip to True after log looks right
+STOP_ON_ERROR = False
 CLEAN_WORK_FOLDER_FIRST = True
 
 # If the work folder cannot be cleared at the start of a run because a leftover Sea-Bird module from an
