@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "suncat"
-version = "0.0.0"
+version = "2026.11.00"
 description = "SUNA + CTD toolkit: readers, QC, calibration and sections for Sea-Bird CTD and SUNA nitrate data"
 readme = "README.md"
 requires-python = ">=3.10"

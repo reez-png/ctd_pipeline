@@ -1,13 +1,49 @@
-# OMI CTD + SUNA Processing Pipeline (v2)
+# SUNCAT — SUNA–CTD Analysis Toolkit
 
 ![tests](https://github.com/reez-png/ctd_pipeline/actions/workflows/tests.yml/badge.svg)
 
-Cruise-centric processing of Sea-Bird CTD casts and rosette-mounted SUNA nitrate, following the
-June 2026 OMI specification (Marrec / Lucas) and the SUNA quality-control method of
-Zheng et al. (2024).
+**SUNCAT** (Sun-Cat ☀️, *SUNA–CTD Analysis Toolkit*) is the cruise-centric processing of Sea-Bird CTD
+casts and rosette-mounted SUNA nitrate for the Ocean Margins Initiative (OMI), following the June 2026
+OMI specification (Marrec / Lucas) and the SUNA quality-control method of Zheng et al. (2024).
 
-This pipeline turns raw instrument files into a quality-controlled nitrate product, organised by
-cruise under an `L0 → L1 → L2 → L3` data-level scheme.
+This repository is two things in one place:
+
+- an installable Python package, **`suncat`**, holding the tested, reusable core (readers, sectioning,
+  seawater science, and the Sea-Bird backend); and
+- the cruise **notebooks and scripts** (step01 to step07, the step00 QC layer, the SUNA QA layer) that
+  import that core to turn raw instrument files into a quality-controlled nitrate product, organised by
+  cruise under an `L0 → L1 → L2 → L3` data-level scheme.
+
+---
+
+## The `suncat` package
+
+The reusable core is an editable-installable package under `src/suncat/`. It is split in two so the
+science is portable and the Windows-only Sea-Bird dependency is isolated:
+
+- a **portable core** that operates on already-produced `.cnv` and L2/L3 products and installs anywhere:
+  - `suncat.io.cnv` — the canonical Sea-Bird `.cnv` reader (`read_cnv`, `read_cnv_full`), one
+    implementation replacing the copies that used to live in each step00 notebook; it also carries the
+    header sampling interval / rate on `df.attrs`.
+  - `suncat.section` — motion-based descent-onset / sectioning (`descent_start`).
+  - `suncat.calc` — seawater science: `salinity` (PSS-78), `thermo` (potential temperature),
+    `depth` (pressure→depth), and `binning` (`bin_mean`).
+  - `suncat.util` — small shared helpers (`pick`, the column-name resolver).
+  - `suncat.config`, `suncat.baseline` — path/cruise configuration and the regression-baseline support.
+- an **optional, Windows-only backend**, `suncat.sbe`, that drives the proprietary SBE Data Processing
+  executables (`run_module`). The portable core never imports it.
+
+`ctd_lib.py` is kept as a thin compatibility shim: it re-exports the seawater functions from
+`suncat.calc` and delegates its descent walk-back to `suncat.section`, so every existing
+`from ctd_lib import …` in the scripts and notebooks keeps working unchanged. The remaining modules
+(`io.suna`, `io.bottles`, `io.write`, `qc`, `nitrate`, `productivity`, `sections`, `viz`, `sbe.psa`)
+are scaffolded and will be filled as the notebooks are migrated.
+
+Each extraction is covered by tests and was verified to change the pipeline's numbers by nothing.
+`pytest -q` runs the suite locally; GitHub Actions runs it on Python 3.10–3.12 on every push. A
+regression baseline (`tools/make_baseline.py`, `tests/baseline/`) freezes the current L3 products on
+your machine so a refactor that moves a number is caught before it reaches data; those frozen products
+are git-ignored and never enter the public repo.
 
 ---
 
@@ -21,6 +57,7 @@ cd ctd_pipeline
 python -m venv .venv
 .venv\Scripts\activate          # Windows (macOS/Linux: source .venv/bin/activate)
 pip install -r requirements.txt
+pip install -e .                # the suncat package (editable), so the notebooks can import it
 jupyter notebook
 ```
 
@@ -57,17 +94,20 @@ python -m venv .venv
 # macOS/Linux:
 # source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .                 # installs the suncat package in editable mode
 ```
 
 Developed and tested on Python 3.14; the test suite also runs on Python 3.10 to 3.12 in CI.
 `requirements.txt` lists the minimum versions; `requirements-lock.txt` pins the exact tested environment
-for reproducing published results.
+for reproducing published results. The `suncat` package declares its own dependencies in
+`pyproject.toml` (`numpy`, `pandas`; optional extras `[viz]`, `[netcdf]`, `[dev]`).
 
 For CTD processing (step01) you also need Sea-Bird **SBE Data Processing** installed (Windows); the
 pipeline calls its executables. Steps 02 to 07 are pure Python.
 
-To run the test suite (optional, for anyone modifying `ctd_lib.py`): `pip install pytest` then
-`pytest -q` from the project root.
+To run the test suite: `pip install -e ".[dev]"` (adds `pytest`), then `pytest -q` from the project
+root. The notebook kernel must be the same environment the package is installed in, so `import suncat`
+resolves there.
 
 > **Data and PSAs are not included in this repository.** The `cruises/*/L0..L3/` folders, the discrete
 > sample tables (`bottle_nitrate/`, `chla/`, `winkler_oxygen/`, `station_coords.csv`) and the `psa/*.psa`
@@ -97,10 +137,21 @@ L1 is readable but unbinned.
 
 ---
 
-## 2. Folder layout (per cruise)
+## 2. Folder layout
 
 ```text
 ctd_pipeline/
+├── pyproject.toml                      # suncat package metadata (name, version, deps, test config)
+├── src/suncat/                         # the installable toolkit (pip install -e .)
+│   ├── io/cnv.py                       # canonical Sea-Bird .cnv reader (read_cnv, read_cnv_full)
+│   ├── section.py                      # motion-based descent onset / sectioning (descent_start)
+│   ├── calc/{salinity,thermo,depth,binning}.py   # PSS-78 S, potential temp, depth, bin_mean
+│   ├── sbe/run.py                      # OPTIONAL Windows backend: run one SBE module (run_module)
+│   ├── util.py                         # pick (column-name resolver)
+│   ├── config.py  baseline.py          # cruise/path config; regression-baseline support
+│   └── io/ qc/ nitrate/ productivity/ sections/ viz/ sbe/psa.py   # scaffolded, filled as notebooks migrate
+├── tools/make_baseline.py              # freeze current L3 outputs as a regression baseline
+├── .github/workflows/tests.yml         # CI: install + pytest on Python 3.10–3.12
 ├── psa/                                # Sea-Bird PSA setup files (LOCAL ONLY, not tracked; rebuild in the Sea-Bird GUI)
 │   ├── 01_datcnv.psa                   # REQUIRED — Data Conversion (profile: .cnv only)
 │   ├── 01_datcnv_bottles.psa           # AUTO-GENERATED when bottle mode is on (Create both + AFM)
@@ -116,7 +167,7 @@ ctd_pipeline/
 │   └── 10_bottlesum.psa                # optional — Bottle Summary (.ros -> .btl), bottle mode only
 ├── docs/                               # all prose docs (PROCESSING_PARAMETERS.md, CRUISE_DATA_COLLECTION.md, BOTTLE_FIRE_PROCESSING.md, README_bottle_columns.md, walkthroughs, decisions memo)
 ├── project_paths.py                    # shared path/calibration resolver, imported by every step
-├── ctd_lib.py                          # tested core: .cnv parser, Section step, PSS-78 salinity, theta, depth
+├── ctd_lib.py                          # compatibility shim: re-exports suncat.calc seawater + delegates descent to suncat.section; keeps the .cnv array reader + CRLF-safe Section writer
 ├── ANALYSIS_WORKFLOW.md                # task-oriented workflow + FAQ (companion to this file)
 ├── cnv_to_csv.py  build_bottle_nitrate_table.py  build_bottle_table.py
 ├── verify_reproducibility.py  combine_readable_profiles.py  fix_psa_output_paths.py  step03_run_report.py
@@ -147,7 +198,8 @@ ctd_pipeline/
 │       ├── step07_productivity_calibration.ipynb
 │       ├── step07_noremoval_productivity_calibration.ipynb
 │       └── step07_npq_comparison.ipynb
-├── tests/                              # pytest suite (ctd_lib, loop edit, bottle table)
+├── tests/                              # pytest suite (suncat modules + ctd_lib, loop edit, bottle table)
+│   └── baseline/                       # frozen L3 reference products (LOCAL ONLY, git-ignored)
 ├── _sbe_work/                          # short, space-free staging area for the Sea-Bird CLI (local)
 └── cruises/
     ├── _TEMPLATE/                      # copy this to start a new cruise
@@ -195,7 +247,8 @@ DatCnv → Filter → Align CTD → Cell Thermal Mass → Section → Loop Edit 
 - **Cell Thermal Mass**: conductivity cell thermal-mass correction (after Align).
 - **Section** (a **non-SBE Python step** inside step01): removes the leading surface soak +
   equilibration dip and keeps downcast + upcast, so Loop Edit's running-maximum-pressure rule is not
-  poisoned by the dip. Downcast selection is deferred to Bin Average.
+  poisoned by the dip. Downcast selection is deferred to Bin Average. The descent-onset logic is the one
+  shared implementation in `suncat.section.descent_start` (reached via `ctd_lib.descent_onset`).
 - **Loop Edit**: percent of mean speed (window 3 s, 20 %), minimum velocity **0.10 m/s**, surface soak
   removal off. A fixed-minimum-velocity variant (`06b`) is kept for rough weather.
 - **Derive**: salinity, density, and derived variables.
@@ -349,7 +402,10 @@ bottle correction — fill the bottle table before relying on `no3_qc`.
 
 Diagnostics that sit *beside* the L0 to L3 flow, not in it: they read step01's own stage outputs and
 judge the processing. None of them change production data; step01 stays the single source of truth that
-they reproduce. Run them when tuning or reviewing the chain, or to answer a reviewer.
+they reproduce. Run them when tuning or reviewing the chain, or to answer a reviewer. These notebooks now
+import the shared implementations from the `suncat` package (the `.cnv` reader `suncat.io.cnv`, the
+descent / sectioning `suncat.section`, the SBE runner `suncat.sbe.run`, `suncat.util.pick`, and
+`suncat.calc.binning.bin_mean`) instead of each carrying its own copy.
 
 - **step00a_filter_qa.py** — Filter QA. Per-channel reduction in scan-to-scan variability (the Filter
   numbers in Section 5): conductivity ~46 %, pressure ~24 %, temperature ~0 %.
@@ -374,9 +430,11 @@ they reproduce. Run them when tuning or reviewing the chain, or to answer a revi
 - **soak_quality_analysis.ipynb** — a lighter, SBE-free soak metric that reads L1 `.cnv` directly
   (per-cast soak seconds and near-surface spiking), for a quick look without rerunning the chain.
 
-The QC (step00b), audit (step00d) and soak (step00e) notebooks share one definition of a Sea-Bird
-bad-flag value and one definition of soak time, so their numbers are mutually consistent. If step01's
-Section ever changes, re-sync these notebooks to it, since they inherit its exact descent-onset logic.
+Because the descent-onset logic now lives in exactly one place (`suncat.section.descent_start`, which
+step01's Section, `ctd_lib.descent_onset`, and the step00 notebooks all use), and the Sea-Bird bad-flag
+sentinel and the soak-time definition are likewise shared through `suncat`, the QC (step00b), audit
+(step00d) and soak (step00e) notebooks stay consistent with step01's Section by construction. step01
+remains the source of truth for the production products.
 
 ---
 
@@ -439,13 +497,15 @@ These were open in v1 and are now settled for the Gulf of Guinea shelf work:
 1. **Open the project** at the top level: `ctd_pipeline` (e.g. `C:\Projects\ctd_pipeline`).
 2. **Create the virtual environment:** Settings → Project → Python Interpreter → Add → Virtualenv →
    New, location `ctd_pipeline/.venv`, base Python 3.10/3.11 (3.12+ also fine).
-3. **Install packages** in the PyCharm terminal (prompt shows `(.venv)`): `pip install -r requirements.txt`.
+3. **Install packages** in the PyCharm terminal (prompt shows `(.venv)`): `pip install -r requirements.txt`
+   then `pip install -e .` (the `suncat` package, so the notebooks can `import suncat`).
 4. **Run step01:** open `step01_run_sbe_processing_v2.py`, edit the settings block
    (`CRUISE_ID`, `SBE_BIN_DIR`, `APPLY_BOTTLES`, `RUN_SBE_COMMANDS = False` for the dry run), press Run.
 5. **Run the notebooks (step02 / step03 / step04 / step05 / step06 / step07, and the SUNA QA
    step00_suna / step01_suna):** in the terminal run `jupyter notebook`, open the `.ipynb` in the
    browser, and run the cells there. The interactive explorers in step04 to step07 need `ipywidgets`
-   (and `ipympl` for live zoom); they degrade gracefully to static figures if those are absent.
+   (and `ipympl` for live zoom); they degrade gracefully to static figures if those are absent. The
+   notebook's kernel must be the environment where `suncat` is installed, so `import suncat` resolves.
 
 ---
 
@@ -490,10 +550,12 @@ Recorded so they are not re-introduced:
 - **SUNA files are raw SATSLF frames**, paired to casts by time overlap via `suna_cast_map.csv`.
 - **19plus V2 specifics.** Strain-gauge pressure (not Digiquartz); temperature `tv290C`, conductivity
   `c0S/m`, salinity `sal00`/`sal78` downstream.
-- **One definition, many notebooks.** The Sea-Bird bad-flag sentinel and the soak-time measurement are
-  defined identically across step00b / step00d / step00e, and the stage audit reproduces step01's
-  physical stages to 0.0 difference. step01 is the source of truth; re-sync the audit notebooks to it
-  after any Section change, never the reverse.
+- **One definition, now one implementation.** The descent-onset / sectioning logic, the `.cnv` reader,
+  the Sea-Bird bad-flag handling and the shared helpers were previously copied across step00b / step00d /
+  step00e and the step01 Section. They now live once in the `suncat` package (`suncat.section`,
+  `suncat.io.cnv`, `suncat.util`, `suncat.calc.binning`) and are imported, so the audit notebooks stay
+  consistent with step01 by construction, and the stage audit still reproduces step01's physical stages
+  to 0.0 difference. step01 is the source of truth for the production products.
 
 ## 8. Known limitation — Stage 1 TSP
 
@@ -518,15 +580,23 @@ Run directly (`python <script>.py`); most have a settings block at the top.
 | `combine_readable_profiles.py` | Stacks step04's per-cast readable CSVs into one cruise-wide table. | After step04. |
 | `fix_psa_output_paths.py` | Blanks hardcoded OutputDir/OutputFile/NameAppend in the PSAs. | Once, or after re-saving any PSA from the SBE GUI. |
 
-**Core library.** `ctd_lib.py` holds the reference implementations shared by these tools — the `.cnv`
-parser, the Section (soak + dip removal, CRLF-safe) step, and the seawater functions (PSS-78 salinity,
-potential temperature, pressure→depth). It is covered by `tests/test_ctd_lib.py` (`pytest -q`), which
-checks each against published reference values, so a regression is caught before it reaches data.
+**Core library.** The reference implementations now live in the `suncat` package: the `.cnv` reader
+(`suncat.io.cnv`), the descent / sectioning (`suncat.section`), the seawater functions (`suncat.calc`:
+PSS-78 salinity, potential temperature, pressure→depth), binning (`suncat.calc.binning`), and the
+Sea-Bird runner (`suncat.sbe`). `ctd_lib.py` remains as a compatibility shim that re-exports the seawater
+functions, delegates its descent walk-back to `suncat.section`, and still holds the numpy-array `.cnv`
+reader and the CRLF-safe `section_cnv` writer used by the standalone tools. The package is covered by
+`tests/` (`pytest -q`), which checks each function against published reference values, so a regression
+is caught before it reaches data.
 
 ---
 
 ## 9b. In progress / planned
 
+- **Package migration.** `suncat` holds the extracted core (readers, sectioning, seawater science,
+  binning, the SBE runner, shared helpers), and the step00 notebooks import it. Still to migrate: the
+  full step01 chain orchestration into `suncat.sbe`, and the SUNA / productivity / sections modules, with
+  the regression baseline extended to guard the L2/L3 products directly.
 - **Hydrographic sections (step06).** Built (Section 4). Still needs each cruise's station coordinate
   table (cast to lat/lon) and a transect definition (which casts, in what order).
 - **Dissolved oxygen calibration (step07).** The oxygen path is coded but **dormant**: no Winkler
@@ -535,6 +605,17 @@ checks each against published reference values, so a regression is caught before
 - **SUNA Stage-1 TSP re-derivation (step03).** `STAGE1_MODE = "tsp"` from raw spectra is still
   work-in-progress (needs the `OPTICAL_WAVELENGTH_OFFSET` baseline, Sakamoto 2009); keep `"onboard"`
   until validated (Section 8).
+
+---
+
+## Versioning
+
+`suncat` uses **calendar versioning (CalVer)**, `YYYY.MM.DD` (for example `2026.11.11`), which suits a
+reproducibility-oriented processing toolkit: the version answers "which processing vintage produced this
+data product," and nothing external pins against a semantic API. Releases are cut on GitHub as tags
+`vYYYY.MM.DD` on `main`, with the same string set in `pyproject.toml`. Use non-zero-padded month and day
+so the tag matches the normalised Python version (for example, September 1 is `2026.9.1`, not
+`2026.09.01`).
 
 ---
 
