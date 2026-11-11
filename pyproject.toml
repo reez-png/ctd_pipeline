@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "suncat"
+version = "0.0.0"
+description = "SUNA + CTD toolkit: readers, QC, calibration and sections for Sea-Bird CTD and SUNA nitrate data"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Maurice Oti Edusei" }]
+dependencies = [
+  "numpy>=1.23",
+  "pandas>=1.5",
+]
+
+# Optional pieces, installed only when needed, so the core stays light and portable.
+[project.optional-dependencies]
+viz    = ["matplotlib>=3.6", "ipympl>=0.9", "ipywidgets>=8.0"]
+netcdf = ["xarray>=2023.1", "netCDF4>=1.6"]
+dev    = ["pytest>=7.0"]
+
+[project.scripts]
+suncat = "suncat.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/suncat"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "baseline: regression checks against frozen reference outputs (skipped when no baseline is present)",
+]
