@@ -1,20 +1,27 @@
 """Canonical Sea-Bird .cnv reader for suncat.
 
-Replaces the three near-identical parsers copied across the QC notebooks, preserving their exact
-behaviour so the frozen regression baseline still holds:
+Replaces the near-identical parsers copied across the QC notebooks, preserving their exact behaviour
+so the frozen regression baseline still holds:
 
   - step00a  read_cnv        -> read_cnv(path)                     (plain parse, all scans)
   - step00b  parse_cnv_raw   -> read_cnv(path, mask_badflag=True)  (NaN the Sea-Bird bad-flag sentinel)
   - step00b  read_cnv_full   -> read_cnv_full(path)                (header + raw rows, for re-writing)
+  - step00c  read_cnv        -> read_cnv(path)                     (same parse; the sampling interval
+                                 / rate from the header is attached to df.attrs, which step00c's
+                                 resolve_sample_rate reads)
 """
 from __future__ import annotations
 import re
 from pathlib import Path
 from typing import NamedTuple
+import numpy as np
 import pandas as pd
 
 # Column names come from header lines like '# name 0 = prdM: Pressure, Strain Gauge [db]'.
 _NAME_RE = re.compile(r"#\s*name\s+(\d+)\s*=\s*([^:]+?)\s*[:=]", re.I)
+# Sampling cadence from the header, so a per-cast sample rate can be resolved (used by align QA).
+_INTERVAL_RE = re.compile(r"#\s*interval\s*=\s*([A-Za-z]+)\s*:\s*([+\-0-9.eE]+)", re.I)
+_RATE_RE = re.compile(r"(?:sampling|sample)\s*rate\s*[:=]\s*([0-9.]+)\s*(?:hz|scans?/sec)", re.I)
 
 # Sea-Bird bad-flag sentinel is -9.990e-29, a TINY negative number written into record ends by shift
 # operations (Align CTD, Cell TM). Bracket it tightly; real T/C/P/S/O2 values never fall here.
@@ -37,33 +44,52 @@ def _read_lines(path):
 
 
 def _scan_header(lines):
-    """Return (ordered column names, index of the first data line). Shared by every reader:
-    names come from the '# name N = short: long' lines, data starts after '*END*'."""
+    """Return (ordered column names, index of the first data line, meta). Shared by every reader:
+    names come from the '# name N = short: long' lines, data starts after '*END*', and meta holds the
+    sampling interval / rate parsed from the header."""
     names, data_start = {}, None
+    meta = {"interval_kind": None, "interval_value": float("nan"), "sample_rate_hz": float("nan")}
     for i, ln in enumerate(lines):
         s = ln.strip()
         if s.startswith("#") or s.startswith("*"):
             m = _NAME_RE.search(ln)
             if m:
                 names[int(m.group(1))] = m.group(2).strip()
+            mi = _INTERVAL_RE.search(ln)
+            if mi:
+                meta["interval_kind"] = mi.group(1).lower()
+                try:
+                    meta["interval_value"] = float(mi.group(2))
+                    if meta["interval_kind"].startswith("second") and meta["interval_value"] > 0:
+                        meta["sample_rate_hz"] = 1.0 / meta["interval_value"]
+                except ValueError:
+                    pass
+            mr = _RATE_RE.search(ln)
+            if mr and not np.isfinite(meta["sample_rate_hz"]):
+                try:
+                    meta["sample_rate_hz"] = float(mr.group(1))
+                except ValueError:
+                    pass
             if s.upper().startswith("*END*"):
                 data_start = i + 1
                 break
     cols = [names[k] for k in sorted(names)]
-    return cols, data_start
+    return cols, data_start, meta
 
 
 def read_cnv(path, mask_badflag: bool = False):
-    """Parse a .cnv into a DataFrame, keeping every scan (including loop-edit flagged ones).
+    """Parse a .cnv into a DataFrame, keeping every scan (including loop-edit flagged ones). The
+    sampling interval / rate from the header is attached to df.attrs (interval_kind, interval_value,
+    sample_rate_hz, source_path).
 
-    mask_badflag=False reproduces the plain step00a reader.
-    mask_badflag=True reproduces step00b parse_cnv_raw: the bad-flag sentinel becomes NaN so it
-    never plots or enters a statistic, while the 'flag' column keeps its sentinel.
+    mask_badflag=False reproduces the plain step00a / step00c readers.
+    mask_badflag=True reproduces step00b parse_cnv_raw: the bad-flag sentinel becomes NaN so it never
+    plots or enters a statistic, while the 'flag' column keeps its sentinel.
     """
     if path is None:
         return None
     lines = _read_lines(path)
-    cols, ds = _scan_header(lines)
+    cols, ds, meta = _scan_header(lines)
     if ds is None:
         return None
     rows = [l.split()[:len(cols)] for l in lines[ds:] if l.strip() and len(l.split()) >= len(cols)]
@@ -74,6 +100,8 @@ def read_cnv(path, mask_badflag: bool = False):
             if fc in bad.columns:
                 bad[fc] = False
         df = df.mask(bad)
+    df.attrs.update(meta)
+    df.attrs["source_path"] = str(path)
     return df
 
 
@@ -83,7 +111,7 @@ def read_cnv_full(path):
     if path is None:
         return None
     lines = _read_lines(path)
-    cols, ds = _scan_header(lines)
+    cols, ds, _meta = _scan_header(lines)
     if ds is None:
         return None
     header = lines[:ds]
