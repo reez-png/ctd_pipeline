@@ -95,3 +95,14 @@ desktop.ini
 !**/winkler_oxygen/*_TEMPLATE.csv
 # Shared SUNA instrument calibration (factory reference, not cruise data)
 !metadata/calibration/*.cal
+# ---- append these to the existing .gitignore in ctd_pipeline ----
+# suncat package
+__pycache__/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+# local regression baseline is made from confidential cruise data: never commit it
+tests/baseline/local/
+!tests/baseline/local/.gitkeep
+!tests/baseline/local/README.md
