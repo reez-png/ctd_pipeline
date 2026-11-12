@@ -106,3 +106,6 @@ dist/
 tests/baseline/local/
 !tests/baseline/local/.gitkeep
 !tests/baseline/local/README.md
+
+# Regression baseline: frozen copies of real cruise products + their manifest. LOCAL ONLY.
+tests/baseline/local/
