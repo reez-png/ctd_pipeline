@@ -31,11 +31,12 @@ ROOT   = None          # None -> $SUNCAT_CTD_ROOT or CWD; or set r"C:\Projects\c
 # The names below follow README section 4b. If a glob prints "(no match)", check the DISCOVERED
 # inventory printed at the end and correct the name here, these are the only things you must get right.
 PRODUCT_GLOBS = [
-    "L3/*_nitrate_QC.csv",                       # step03: per-cast SUNA nitrate QC (primary product)
-    "L3/productivity/*_productivity.csv",        # step07: chlorophyll calibration (NPQ removed)
-    "L3/productivity_noNPQ/*_productivity.csv",  # step07_noremoval: chlorophyll (NPQ kept)
-    "L3/SUNA/*.csv",                             # bottle-corrected SUNA L3, if your step writes one
-    "L2/SUNA/*_SUNA_1s.csv",                     # step02: merged CTD+SUNA 1 s (mid-chain checkpoint)
+    "L3/*_nitrate_QC.csv",                           # step03: per-cast SUNA nitrate QC (primary product)
+    "L3/productivity/*_chl_L3_corrected.csv",        # step07: chlorophyll calibration (NPQ removed)
+    "L3/productivity_noNPQ/*_chl_L3_corrected.csv",  # step07_noremoval: chlorophyll (NPQ kept)
+    "L3/SUNA/*.csv",                                 # bottle-corrected SUNA L3
+    "L2/SUNA/*_SUNA_1s.csv",                         # step02: merged CTD+SUNA 1 s (mid-chain checkpoint)
+    "L2/SUNA/*_suna_L2_colocated.csv",               # step02 standalone co-location (cross-check)
 ]
 
 # Scalar results to freeze (optional but recommended). Fill from your current calibration outputs,
