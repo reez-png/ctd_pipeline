@@ -1463,10 +1463,13 @@ def build_sbe_command(
     config_file: Optional[Path] = None,
     extra_args: Optional[List[str]] = None,
 ) -> List[str]:
-    """Build a Sea-Bird command line call using no-space arguments."""
-    extra_args = extra_args or []
-    ensure_folder(output_dir)
+    """Build a Sea-Bird command line call using no-space arguments.
 
+    Thin wrapper: creates the output folder, rejects paths with spaces, and computes the local-name
+    flag from this script's globals, then delegates the pure argument assembly to suncat.sbe.command.
+    """
+    from suncat.sbe.command import build_command
+    ensure_folder(output_dir)
     for label, p in [
         ("input_file", input_file),
         ("output_dir", output_dir),
@@ -1476,41 +1479,19 @@ def build_sbe_command(
         if p is None:
             continue
         ensure_no_spaces(p, label)
-
     use_local = bool(globals().get("RUN_FROM_INPUT_FILE_FOLDER", False)) and bool(
         globals().get("USE_LOCAL_INPUT_AND_CONFIG_NAMES", True)
     )
+    return build_command(
+        exe_path, input_file, output_dir, output_file, psa_file,
+        config_file=config_file, extra_args=extra_args, use_local_names=use_local,
+    )
 
-    input_arg = input_file.name if use_local else str(input_file)
-    config_arg = None
-    if config_file is not None:
-        # Only use local config name when it is beside the input file.
-        if use_local and config_file.parent.resolve() == input_file.parent.resolve():
-            config_arg = config_file.name
-        else:
-            config_arg = str(config_file)
-
-    # SBE command line modules expect /f to be the output basename.
-    # Give /f without .cnv or .asc to avoid doubled extensions.
-    output_stem = Path(output_file).stem
-    command = [
-        str(exe_path),
-        f"/i{input_arg}",
-        f"/p{psa_file}",
-        f"/f{output_stem}",
-        f"/o{output_dir}",
-    ]
-
-    if config_arg is not None:
-        command.append(f"/c{config_arg}")
-
-    command.extend(extra_args)
-    command.append("/s")
-    return command
 
 def command_to_text(command: List[str]) -> str:
     """Convert command list to readable Windows command text."""
-    return subprocess.list2cmdline(command)
+    from suncat.sbe.command import command_to_text as _ctt
+    return _ctt(command)
 
 
 def run_command(
