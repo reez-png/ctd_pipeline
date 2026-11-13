@@ -53,9 +53,10 @@ _P_COL = re.compile(r"pr[dDsS]?M", re.I)
 @dataclass
 class GridConfig:
     npq_depth_dbar: float = 10.0     # step07 NPQ_DEPTH
-    day_start_hour: int = 7          # step07 DAY_START, local hours (Ghana: local = UTC)
+    day_start_hour: int = 7          # step07 DAY_START, local solar hours
     day_end_hour: int = 17           # step07 DAY_END (exclusive)
-    utc_offset_hours: float = 0.0    # local time = UTC + this
+    utc_offset_hours: float = 0.0    # fallback for a cast with no longitude: local time = UTC + this
+    solar_time: bool = True          # daylight by local solar time, UTC + longitude / 15 h, when known
     min_frames: int = 1              # minimum frames for a bin value (SBE Bin Average MinScansPerBin)
     max_ctd_gap_s: float = 1.0       # fallback only: a frame must lie within this of a CTD 1 s record
 
@@ -132,12 +133,15 @@ def bin_stats(p, values, binsize: float, min_frames: int = 1) -> pd.DataFrame:
     return g[g["n"] >= min_frames]
 
 
-def npq_risk(bin_p: np.ndarray, start_time, cfg: GridConfig) -> pd.Series:
-    """True where a bin is at or above npq_depth on a cast that started in local daylight; NA if the time
-    is unknown. Same criterion step07 uses to drop bottles from its chlorophyll fit."""
+def npq_risk(bin_p: np.ndarray, start_time, cfg: GridConfig, lon: float | None = None) -> pd.Series:
+    """True where a bin is at or above npq_depth on a cast that started in daylight; NA if the time is unknown.
+    Daylight is judged in local solar time, UTC + lon / 15 h, when the cast's longitude is known (cfg.solar_time),
+    else in clock time UTC + cfg.utc_offset_hours. Same criterion step07 uses to drop bottles from its fit."""
     if start_time is None or pd.isna(start_time):
         return pd.Series(pd.NA, index=range(len(bin_p)), dtype="boolean")
-    hour = (start_time + pd.Timedelta(hours=cfg.utc_offset_hours)).hour
+    sun = cfg.solar_time and lon is not None and np.isfinite(lon)
+    t = start_time + pd.Timedelta(hours=(float(lon) / 15.0) if sun else cfg.utc_offset_hours)
+    hour = t.hour + t.minute / 60.0
     daylit = cfg.day_start_hour <= hour < cfg.day_end_hour
     return pd.Series(daylit & (np.asarray(bin_p, float) <= cfg.npq_depth_dbar), dtype="boolean")
 
@@ -145,7 +149,7 @@ def npq_risk(bin_p: np.ndarray, start_time, cfg: GridConfig) -> pd.Series:
 # ------------------------------------------------------------------ one cast
 def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame | None = None,
               chl: pd.DataFrame | None = None, suna_offset_s: float | None = None,
-              cfg: GridConfig | None = None) -> tuple[pd.DataFrame, CastStats]:
+              cfg: GridConfig | None = None, position: dict | None = None) -> tuple[pd.DataFrame, CastStats]:
     cfg = cfg or GridConfig()
     st = CastStats(cast_id)
     if str(meta.get("bintype", "")).lower() != "decibars":
@@ -241,13 +245,22 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
         out["chl_mg_m3"] = s["mean"].reindex(pd.Index(b_ctd)).to_numpy()
         out["chl_n"] = s["n"].reindex(pd.Index(b_ctd)).fillna(0).astype(int).to_numpy()
         st.chl_bins = int((out["chl_n"] > 0).sum())
-    out["chl_npq_risk"] = npq_risk(out["pressure_db"].to_numpy(), meta.get("start_time"), cfg).to_numpy()
+    pos = position or {}
+    start = pos.get("start_utc")
+    if start is None or pd.isna(start):
+        start = meta.get("start_time")
+    lon = pos.get("lon")
+    lon = float(lon) if lon is not None and pd.notna(lon) else None
+    out["chl_npq_risk"] = npq_risk(out["pressure_db"].to_numpy(), start, cfg, lon).to_numpy()
+    st.notes.append(f"NPQ daylight: solar time at {lon:.2f} E" if (cfg.solar_time and lon is not None)
+                    else f"NPQ daylight: clock time UTC{cfg.utc_offset_hours:+g} h (no longitude)")
     return out, st
 
 
 # ------------------------------------------------------------------ a cruise
 def grid_cruise(cruise_id: str, ctd_dir: Path, nitrate_dir: Path | None, chl_file: Path | None,
-                suna_l2_dir: Path | None, out_dir: Path | None, cfg: GridConfig | None = None):
+                suna_l2_dir: Path | None, out_dir: Path | None, cfg: GridConfig | None = None,
+                positions: pd.DataFrame | None = None):
     """Grid every cast that has a `<cast>_1m_down.cnv`. Returns (tables by cast, stats DataFrame).
     Writes `<cast>_L3_1m_down.csv` into out_dir when out_dir is given."""
     cfg = cfg or GridConfig()
@@ -264,7 +277,8 @@ def grid_cruise(cruise_id: str, ctd_dir: Path, nitrate_dir: Path | None, chl_fil
             m = pd.read_csv(Path(suna_l2_dir) / f"{cast}_SUNA_1s.csv", nrows=1)
             if "suna_time_offset_s" in m and m["suna_time_offset_s"].notna().any():
                 offset = float(m["suna_time_offset_s"].iloc[0])
-        table, st = grid_cast(cast, ctd, meta, nf, chl, offset, cfg)
+        pos = positions.loc[cast].to_dict() if positions is not None and cast in positions.index else None
+        table, st = grid_cast(cast, ctd, meta, nf, chl, offset, cfg, position=pos)
         table.insert(0, "cruise_id", cruise_id)
         tables[cast] = table
         stats.append(st.row())
