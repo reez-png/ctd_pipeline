@@ -198,7 +198,7 @@ LAYOUTS = {
 }
 MIGRATE_GLOB = {key: g for key, _v1, _v2, g in PRODUCTS}
 
-ACTIVE_LAYOUT = "v1"   # flips to "v2" only after every step uses product_dir (docs/DATA_LEVELS.md)
+ACTIVE_LAYOUT = "v2"   # switched Nov 2026 after every cruise was migrated (tools/migrate_layout.py)
 
 
 def active_layout() -> str:

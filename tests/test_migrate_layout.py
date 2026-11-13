@@ -53,7 +53,7 @@ def run(repo: Path, *args: str) -> int:
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("CTD_PIPELINE_ROOT", str(tmp_path))
-    monkeypatch.delenv("CTD_PIPELINE_LAYOUT", raising=False)
+    monkeypatch.setenv("CTD_PIPELINE_LAYOUT", "v1")       # independent of ACTIVE_LAYOUT
     cdir = tmp_path / "cruises" / CRUISE
     for i, rel in enumerate(V1_FILES + UNCLAIMED):
         p = cdir / rel

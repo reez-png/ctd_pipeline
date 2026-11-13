@@ -60,9 +60,9 @@ def test_product_dir_resolves_both_layouts(tmp_path, monkeypatch):
     assert pp.product_dir("P45_06", "ctd_grid_1m_down") == base / "L3" / "CTD" / "CTD_1m_down"
 
 
-def test_default_layout_is_v1_until_the_flip(monkeypatch):
+def test_default_layout_is_v2_after_the_flip(monkeypatch):
     monkeypatch.delenv("CTD_PIPELINE_LAYOUT", raising=False)
-    assert pp.active_layout() == "v1"
+    assert pp.active_layout() == "v2"
 
 
 def test_unknown_names_fail_loudly(monkeypatch):
