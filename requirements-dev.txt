@@ -1,1 +1,5 @@
 ﻿pytest>=7.0
+# tests/test_synthetic_cruise.py runs the real notebooks (tools/run_notebook.py); it skips itself without these
+nbclient>=0.8
+nbformat>=5.7
+ipykernel>=6.0
