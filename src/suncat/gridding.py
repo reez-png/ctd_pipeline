@@ -215,7 +215,7 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
         s = bin_stats(pz[use], nf.loc[use, "no3_qc"], bs, cfg.min_frames)
         idx = pd.Index(b_ctd)
         out["nitrate_uM"] = s["mean"].reindex(idx).to_numpy()
-        out["nitrate_n"] = s["n"].reindex(idx).fillna(0).astype(int).to_numpy()
+        out["nitrate_n"] = pd.to_numeric(s["n"].reindex(idx), errors="coerce").fillna(0).astype(int).to_numpy()
         out["nitrate_sd"] = s["sd"].reindex(idx).to_numpy()
         lag = bool(_flag(nf.loc[use, "lag_limited"]).any()) if "lag_limited" in nf and use.any() else False
         out["nitrate_lag_limited"] = pd.Series(np.where(out["nitrate_n"] > 0, lag, pd.NA), dtype="boolean").to_numpy()
@@ -243,7 +243,7 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
         st.chl_used = int(ok.sum())
         s = bin_stats(c.loc[ok, "pressure_db"], c.loc[ok, "chl_corrected"], bs, cfg.min_frames)
         out["chl_mg_m3"] = s["mean"].reindex(pd.Index(b_ctd)).to_numpy()
-        out["chl_n"] = s["n"].reindex(pd.Index(b_ctd)).fillna(0).astype(int).to_numpy()
+        out["chl_n"] = pd.to_numeric(s["n"].reindex(pd.Index(b_ctd)), errors="coerce").fillna(0).astype(int).to_numpy()
         st.chl_bins = int((out["chl_n"] > 0).sum())
     pos = position or {}
     start = pos.get("start_utc")

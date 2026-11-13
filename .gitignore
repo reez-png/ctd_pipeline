@@ -110,3 +110,7 @@ tests/baseline/local/
 
 # Regression baseline: frozen copies of real cruise products + their manifest. LOCAL ONLY.
 tests/baseline/local/
+
+# Per-cruise SUNA calibration (tools/set_suna_calibration.py): derived from the cruise's bottles, kept with
+# the cruise data, not published. (No other rule covers a .json in metadata/.)
+cruises/*/metadata/suna_calibration.json
