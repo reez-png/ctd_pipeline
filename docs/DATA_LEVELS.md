@@ -55,7 +55,7 @@ Bold marks a folder that moves. `v1` is the layout the pipeline was built on; `v
 | `chl_calibrated` | L3/productivity | **L2/productivity** | step07_productivity_calibration | baseline |
 | `chl_calibrated_noNPQ` | L3/productivity_noNPQ | **L2/productivity_noNPQ** | step07_noremoval | baseline |
 | `ctd_grid_1m_down` | L2/CTD/CTD_1m_down | **L3/CTD/CTD_1m_down** | step01 (BinAvg 1 m, down-cast) | step00d, step04_plot_profiles, step05_profile_diagnostics, step06, step07 (all three) |
-| `grid_1m_down` | L3/gridded | L3/gridded | new gridder (phase 4) | step04 to step06 after phase 4 |
+| `grid_1m_down` (`<cast>_L3_1m_down.csv`) | L3/gridded | L3/gridded | step08_grid_l3 (`suncat.gridding`) | step04 to step06 after phase 4 |
 | `qc_plots` | L2/CTD/qc_plots | **_figures/qc** | step00a, step00b, step00c, step00d | people |
 | `profile_plots` | L2/CTD/profile_plots | **_figures/profiles** | step04_plot_profiles, step05_profile_diagnostics | people |
 | `profiles_table` (`combined_all_casts_*.csv`) | L2/CTD | **L3/CTD** | combine_readable_profiles | people |
