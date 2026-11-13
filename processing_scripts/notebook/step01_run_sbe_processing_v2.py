@@ -64,7 +64,7 @@ except NameError:
 for _p in (_anchor, *_anchor.parents):
     if (_p / "project_paths.py").exists():
         sys.path.insert(0, str(_p)); break
-from project_paths import project_root, find_xmlcon
+from project_paths import project_root, find_xmlcon, product_dir
 
 CTD_ROOT     = project_root()
 PSA_ROOT     = CTD_ROOT / "psa"
@@ -74,25 +74,25 @@ CRUISES_ROOT = CTD_ROOT / "cruises"
 CRUISE_ID  = "P45_07"
 CRUISE_DIR = CRUISES_ROOT / CRUISE_ID
 
-# --- Level roots for this cruise -------------------------------------------
-L0_CTD_ROOT  = CRUISE_DIR / "L0" / "CTD"
-L0_SUNA_ROOT = CRUISE_DIR / "L0" / "SUNA"
-L1_CTD_ROOT  = CRUISE_DIR / "L1" / "CTD"
-L1_SUNA_ROOT = CRUISE_DIR / "L1" / "SUNA"
-L2_CTD_ROOT  = CRUISE_DIR / "L2" / "CTD"
-L2_SUNA_ROOT = CRUISE_DIR / "L2" / "SUNA"
-L3_ROOT      = CRUISE_DIR / "L3"
+# --- Product folders for this cruise ----------------------------------------
+# Resolved by name from the layout registry (project_paths.PRODUCTS, docs/DATA_LEVELS.md), so they
+# follow ACTIVE_LAYOUT. The variable names keep their historical level prefixes for now.
+L0_CTD_ROOT  = product_dir(CRUISE_ID, "ctd_raw")
+L0_SUNA_ROOT = product_dir(CRUISE_ID, "suna_raw")
+L1_CTD_ROOT  = product_dir(CRUISE_ID, "ctd_datcnv")
+L1_SUNA_ROOT = product_dir(CRUISE_ID, "suna_l1")
+L2_SUNA_ROOT = product_dir(CRUISE_ID, "suna_l2")
 
-# --- L2 process subfolders: one folder per stage ---------------------------
-L2_FILTER  = L2_CTD_ROOT / "Filter"
-L2_ALIGN   = L2_CTD_ROOT / "Align_CTD"
-L2_CELLTM  = L2_CTD_ROOT / "Cell_tm"
-L2_SECTION = L2_CTD_ROOT / "Section"
-L2_LOOP    = L2_CTD_ROOT / "Loop_Edit"
-L2_DERIVED = L2_CTD_ROOT / "Derived"
-L2_1M_DOWN = L2_CTD_ROOT / "CTD_1m_down"
-L2_1S      = L2_CTD_ROOT / "CTD_1s"
-L2_BOTTLE  = L2_CTD_ROOT / "Bottle"
+# --- SBE stage folders: one folder per stage ---------------------------------
+L2_FILTER  = product_dir(CRUISE_ID, "ctd_filter")
+L2_ALIGN   = product_dir(CRUISE_ID, "ctd_align")
+L2_CELLTM  = product_dir(CRUISE_ID, "ctd_celltm")
+L2_SECTION = product_dir(CRUISE_ID, "ctd_section")
+L2_LOOP    = product_dir(CRUISE_ID, "ctd_loopedit")
+L2_DERIVED = product_dir(CRUISE_ID, "ctd_derived")
+L2_1M_DOWN = product_dir(CRUISE_ID, "ctd_grid_1m_down")
+L2_1S      = product_dir(CRUISE_ID, "ctd_1s")
+L2_BOTTLE  = product_dir(CRUISE_ID, "ctd_bottle")
 
 # Raw input + audit output for this run.
 RAW_INPUT_ROOT = L0_CTD_ROOT
@@ -250,7 +250,7 @@ LINEAR_MODULE_SEQUENCE = [
         "psa": "05_filter.psa",                       # existing PSA filename kept
         "enabled": APPLY_FILTER,                      # ON in the agreed chain
         "input_kind": "previous",
-        "output_folder": L2_FILTER,                   # <-- L2/CTD/Filter
+        "output_folder": L2_FILTER,                   # <-- product "ctd_filter"
         "output_suffix": "_filt.cnv",
         "needs_config": False,
         "extra_args": [],
@@ -262,7 +262,7 @@ LINEAR_MODULE_SEQUENCE = [
         "psa": "02_alignctd.psa",                     # existing PSA filename kept
         "enabled": True,
         "input_kind": "previous",
-        "output_folder": L2_ALIGN,                    # <-- L2/CTD/Align_CTD
+        "output_folder": L2_ALIGN,                    # <-- product "ctd_align"
         "output_suffix": "_al.cnv",
         "needs_config": False,
         "extra_args": [],
@@ -274,7 +274,7 @@ LINEAR_MODULE_SEQUENCE = [
         "psa": "04_celltm.psa",
         "enabled": APPLY_CELLTM,                      # ON in the agreed chain
         "input_kind": "previous",
-        "output_folder": L2_CELLTM,                   # <-- L2/CTD/Cell_tm
+        "output_folder": L2_CELLTM,                   # <-- product "ctd_celltm"
         "output_suffix": "_ctm.cnv",
         "needs_config": False,
         "extra_args": [],
@@ -287,7 +287,7 @@ LINEAR_MODULE_SEQUENCE = [
         "psa": None,
         "enabled": APPLY_SECTION,
         "input_kind": "previous",
-        "output_folder": L2_SECTION,                  # <-- L2/CTD/Section
+        "output_folder": L2_SECTION,                  # <-- product "ctd_section"
         "output_suffix": "_sec.cnv",
         "needs_config": False,
         "extra_args": [],
@@ -300,7 +300,7 @@ LINEAR_MODULE_SEQUENCE = [
         "psa_candidates": ["06a_loopedit_percentmean.psa", "06_loopedit.psa"],
         "enabled": True,
         "input_kind": "previous",
-        "output_folder": L2_LOOP,                     # <-- L2/CTD/Loop_Edit
+        "output_folder": L2_LOOP,                     # <-- product "ctd_loopedit"
         "output_suffix": "_loop.cnv",
         "needs_config": False,
         "extra_args": [],
@@ -312,7 +312,7 @@ LINEAR_MODULE_SEQUENCE = [
         "psa": "07_derive.psa",
         "enabled": True,
         "input_kind": "previous",
-        "output_folder": L2_DERIVED,                  # <-- L2/CTD/Derived
+        "output_folder": L2_DERIVED,                  # <-- product "ctd_derived"
         "output_suffix": "_der.cnv",
         "needs_config": False,
         "extra_args": [],
@@ -331,7 +331,7 @@ BINAVG_BRANCHES = [
         "psa": "08b_binavg_1m_down.psa",
         "enabled": True,
         "input_kind": "derived_unbinned",
-        "output_folder": L2_1M_DOWN,                  # <-- L2/CTD/CTD_1m_down
+        "output_folder": L2_1M_DOWN,                  # <-- product "ctd_grid_1m_down"
         "output_suffix": "_1m_down.cnv",
         "needs_config": False,
         "extra_args": [],
@@ -343,7 +343,7 @@ BINAVG_BRANCHES = [
         "psa": "08d_binavg_1s_full.psa",
         "enabled": True,
         "input_kind": "derived_unbinned",
-        "output_folder": L2_1S,                       # <-- L2/CTD/CTD_1s
+        "output_folder": L2_1S,                       # <-- product "ctd_1s"
         "output_suffix": "_1s.cnv",
         "needs_config": False,
         "extra_args": [],
@@ -406,7 +406,7 @@ BOTTLE_BRANCHES = [
         "enabled": APPLY_BOTTLES and RUN_BOTTLE_SUMMARY and _BOTTLESUM_PSA_PRESENT,
         "input_folder": L1_CTD_ROOT,                  # DatCnv writes <cast>.ros beside the .cnv
         "input_suffix": ".ros",
-        "output_folder": L2_BOTTLE,                   # <-- L2/CTD/Bottle
+        "output_folder": L2_BOTTLE,                   # <-- product "ctd_bottle"
         "output_suffix": ".btl",
         "needs_config": False,
         "extra_args": [],
@@ -707,7 +707,6 @@ def validate_processing_setup() -> pd.DataFrame:
     require_folder(SBE_BIN_DIR, "SBE executable")
     ensure_folder(OUTPUT_ROOT)
     ensure_folder(L1_CTD_ROOT)
-    ensure_folder(L2_CTD_ROOT)
     ensure_folder(L2_DERIVED)
 
     for module in expected_enabled_modules():
@@ -2328,7 +2327,6 @@ deliverable_records: List[Dict[str, Any]] = []
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 SBE_WORK_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 L1_CTD_ROOT.mkdir(parents=True, exist_ok=True)
-L2_CTD_ROOT.mkdir(parents=True, exist_ok=True)
 L2_DERIVED.mkdir(parents=True, exist_ok=True)
 
 # Guard FIRST. If Section 5D was not run, the no-space PSA folder will not

@@ -30,14 +30,15 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-CTD_ROOT   = Path(r"C:\Users\OA_2023-03\Projects\ctd_pipeline_v2\ctd")
+from project_paths import project_root, product_dir   # beside this script, at the repo root
+CTD_ROOT   = project_root()
 CRUISE_ID  = "P45_06"                       # overridden by a command-line arg if given
 if len(sys.argv) > 1:
     CRUISE_ID = sys.argv[1]
 
 CRUISE_DIR = CTD_ROOT / "cruises" / CRUISE_ID
-PLOT_ROOT  = CRUISE_DIR / "L2" / "CTD" / "profile_plots"   # where step04 wrote _readable.csv
-OUT_DIR    = CRUISE_DIR / "L2" / "CTD"                     # combined file lands in L2/CTD
+PLOT_ROOT  = product_dir(CRUISE_ID, "profile_plots")   # where step04 wrote _readable.csv
+OUT_DIR    = product_dir(CRUISE_ID, "profiles_table")   # product "profiles_table"
 OUT_NAME   = "combined_all_casts_final_1m_down_profiles.csv"
 
 # Preferred left-to-right column order (any extras are appended after these).

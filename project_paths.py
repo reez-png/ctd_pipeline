@@ -188,6 +188,7 @@ PRODUCTS = (
     ("grid_1m_down",         "L3/gridded",             "L3/gridded",              "*"),
     ("qc_plots",             "L2/CTD/qc_plots",        "_figures/qc",             "*"),
     ("profile_plots",        "L2/CTD/profile_plots",   "_figures/profiles",       "*"),
+    ("profiles_table",       "L2/CTD",                 "L3/CTD",                  "combined_all_casts_*.csv"),
 )
 LAYOUTS = {
     "v1": {key: v1 for key, v1, _v2, _g in PRODUCTS},

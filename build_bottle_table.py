@@ -37,7 +37,8 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-CTD_ROOT   = Path(r"C:\Projects\ctd_pipeline")
+from project_paths import project_root, product_dir   # beside this script, at the repo root
+CTD_ROOT   = project_root()
 CRUISE_ID  = "P45_06"
 CRUISE_DIR = CTD_ROOT / "cruises" / CRUISE_ID
 
@@ -46,8 +47,8 @@ NUTRIENT_FILE = CRUISE_DIR / "metadata" / "bottle_nitrate" / "OMI_nutrients_all_
 # How the raw file names the cruise (it uses hyphens: "P45-06").
 NUTRIENT_CRUISE_LABEL = "P45-06"
 
-L1_CTD_ROOT  = CRUISE_DIR / "L1" / "CTD"        # cast .cnv headers (start_time)
-L2_SUNA_ROOT = CRUISE_DIR / "L2" / "SUNA"       # which casts have SUNA merged products
+L1_CTD_ROOT  = product_dir(CRUISE_ID, "ctd_datcnv")        # cast .cnv headers (start_time)
+L2_SUNA_ROOT = product_dir(CRUISE_ID, "suna_l2")       # which casts have SUNA merged products
 BOTTLE_DIR   = CRUISE_DIR / "metadata" / "bottle_nitrate"
 
 # Column names in the raw nutrient file.
