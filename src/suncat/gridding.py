@@ -13,12 +13,14 @@ the nitrate and chlorophyll columns are averaged onto the same bins the same way
   sd       the sample standard deviation (ddof = 1) where n >= 2, else empty; with n of 2 or 3 it is a range
            indicator, not a reliable estimate of the spread
 
-Nitrate frames are used only if they are on the down-cast leg (at or before the CTD's maximum pressure, as
-for the CTD bins), fall where the CTD kept data (within max_ctd_gap_s of a CTD 1 s record: Loop Edit flags
-scans while the package is held still or reverses, Bin Average drops them, and those seconds are missing from
-the 1 s record, so frames there are left out exactly as the CTD's own scans are), passed SUNA spectral QC
-(L1_clean), and have a finite calibrated value (no3_qc). Frames whose bin is not among the CTD's bins are
-counted and left out.
+Nitrate frames are used only if they are on the down-cast leg (up to the scan of maximum pressure among the
+scans Loop Edit kept, as for the CTD bins), coincide with a CTD scan Bin Average used (step03's ctd_scan_kept:
+the 4 Hz Derived-file scan at the same moment was kept by Loop Edit), passed SUNA spectral QC (L1_clean), and
+have a finite calibrated value (no3_qc). Each frame is binned by the pressure of that same scan
+(ctd_scan_pressure_db), so a nitrate frame enters a bin exactly when the CTD's own scan did. Frames whose bin
+is not among the CTD's bins are counted and left out. For a cast without per-scan status (no Derived file) the
+fallback is the 1 s record: frames within max_ctd_gap_s of a CTD second, binned by its pressure; this catches
+gaps in the 1 s record but not Loop Edit's reversal flags, and a note says so.
 
 The CTD rows are keyed by their bin: some Bin Average runs write the bin centre as the pressure (P45_06), others
 the mean pressure of the scans in the bin (P45_07). The bin centre goes in pressure_db and the CTD's own value
@@ -55,7 +57,7 @@ class GridConfig:
     day_end_hour: int = 17           # step07 DAY_END (exclusive)
     utc_offset_hours: float = 0.0    # local time = UTC + this
     min_frames: int = 1              # minimum frames for a bin value (SBE Bin Average MinScansPerBin)
-    max_ctd_gap_s: float = 1.0       # a nitrate frame must lie within this of a kept CTD 1 s record
+    max_ctd_gap_s: float = 1.0       # fallback only: a frame must lie within this of a CTD 1 s record
 
 
 @dataclass
@@ -181,14 +183,21 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
         need = {"pressure_db", "leg", "ctd_gap_s", "L1_clean", "no3_qc"}
         if not need <= set(nitrate.columns):
             raise ValueError(f"{cast_id}: nitrate product lacks {sorted(need - set(nitrate.columns))}; "
-                             "re-run step03 (it writes pressure_db, leg and ctd_gap_s since Nov 2026)")
+                             "re-run step03 (it writes pressure_db, leg, ctd_gap_s and the ctd_scan columns "
+                             "since Nov 2026)")
         nf = nitrate.copy()
         st.nitrate_frames = len(nf)
         down = nf["leg"].astype(str).str.lower().eq("down")
-        kept = pd.to_numeric(nf["ctd_gap_s"], errors="coerce") <= cfg.max_ctd_gap_s
+        if "ctd_scan_kept" in nf and nf["ctd_scan_kept"].notna().any():
+            kept = _flag(nf["ctd_scan_kept"])
+            pz = pd.to_numeric(nf["ctd_scan_pressure_db"], errors="coerce")
+        else:
+            kept = pd.to_numeric(nf["ctd_gap_s"], errors="coerce") <= cfg.max_ctd_gap_s
+            pz = pd.to_numeric(nf["pressure_db"], errors="coerce")
+            st.notes.append("no per-scan Loop Edit status; 1 s record gap rule used (misses reversal flags)")
         clean = _flag(nf["L1_clean"])
-        finite = pd.to_numeric(nf["no3_qc"], errors="coerce").notna() & pd.to_numeric(nf["pressure_db"], errors="coerce").notna()
-        nb = bin_ids(nf["pressure_db"], bs)
+        finite = pd.to_numeric(nf["no3_qc"], errors="coerce").notna() & pz.notna()
+        nb = bin_ids(pz, bs)
         inside = pd.Series(np.isin(nb, b_ctd), index=nf.index)
         st.nitrate_dropped = {
             "upcast": int((~down).sum()),
@@ -199,7 +208,7 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
         }
         use = down & kept & clean & finite & inside
         st.nitrate_used = int(use.sum())
-        s = bin_stats(nf.loc[use, "pressure_db"], nf.loc[use, "no3_qc"], bs, cfg.min_frames)
+        s = bin_stats(pz[use], nf.loc[use, "no3_qc"], bs, cfg.min_frames)
         idx = pd.Index(b_ctd)
         out["nitrate_uM"] = s["mean"].reindex(idx).to_numpy()
         out["nitrate_n"] = s["n"].reindex(idx).fillna(0).astype(int).to_numpy()

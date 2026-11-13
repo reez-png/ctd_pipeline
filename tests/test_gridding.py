@@ -108,6 +108,31 @@ def test_frames_where_the_ctd_kept_no_data_are_left_out(ctd):
     assert st.nitrate_dropped["ctd_not_kept"] == 119
 
 
+def test_scan_level_rule_follows_loop_edit_and_bins_by_the_scan_pressure(ctd):
+    # P45_06 CTD_04's bottom stop: the 1 s record has every second (gap small), but Loop Edit kept no scan
+    # during the heave; only frames whose concurrent 4 Hz scan was kept enter the bin, at that scan's pressure
+    df, meta = ctd
+    nf = frames([(10.4, "down", True, 1.0, True)] * 6, gap=0.2)
+    nf["ctd_scan_pressure_db"] = [10.40, 10.45, 10.47, 10.46, 10.52, 9.40]
+    nf["ctd_scan_kept"] = [True, False, False, False, True, True]
+    nf["no3_qc"] = [1.0, 50.0, 50.0, 50.0, 3.0, 7.0]
+    out, st = g.grid_cast("C1", df, meta, nf)
+    r = out.set_index("pressure_db")
+    assert r.loc[10.0, "nitrate_n"] == 1 and r.loc[10.0, "nitrate_uM"] == 1.0     # 10.40 kept
+    assert r.loc[11.0, "nitrate_n"] == 1 and r.loc[11.0, "nitrate_uM"] == 3.0     # binned by scan p 10.52
+    assert r.loc[9.0, "nitrate_uM"] == 7.0 and st.nitrate_dropped["ctd_not_kept"] == 3
+    assert not any("gap rule" in n for n in st.notes)
+
+
+def test_without_scan_status_the_1s_gap_rule_is_used_and_noted(ctd):
+    df, meta = ctd
+    nf = frames([(9.0, "down", True, 2.0, False)], gap=0.3)
+    nf["ctd_scan_pressure_db"], nf["ctd_scan_kept"] = np.nan, pd.NA
+    out, st = g.grid_cast("C1", df, meta, nf)
+    assert out.set_index("pressure_db").loc[9.0, "nitrate_n"] == 1
+    assert any("gap rule" in n for n in st.notes)
+
+
 def test_mean_pressure_bins_are_keyed_by_centre_and_ambiguous_files_refused(ctd):
     df, meta = ctd
     shifted = df.assign(prdM=[8.247, 9.023, 10.002, 10.957])           # P45_07: mean pressure per bin
