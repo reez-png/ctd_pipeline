@@ -10,6 +10,7 @@ cruises/*/L2/
 cruises/*/L3/
 cruises/*/_audit/
 cruises/*/_sbe_work/
+cruises/*/_figures/
 
 # Sea-Bird no-space staging area, including the timestamped fallback folders
 # the runner creates when the default one is locked (_sbe_work_YYYYMMDD_HHMMSS).

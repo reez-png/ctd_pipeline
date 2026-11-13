@@ -151,6 +151,80 @@ def suna_cast_map(cruise_id: str) -> Path:
     return cruise_metadata_dir(cruise_id) / "suna_cast_map.csv"
 
 
+# ---------------------------------------------------------------------------
+# Data-level layout (see docs/DATA_LEVELS.md)
+# ---------------------------------------------------------------------------
+# Every step asks for a product folder by NAME, product_dir(cruise_id, "nitrate_qc"), instead of
+# building "L2"/"L3" paths itself, so the level scheme lives in exactly one place.
+#
+#   v1  the layout the pipeline was built on (binned at L2, calibrated at L3)
+#   v2  the layout agreed with Amala and Edem, Nov 2026: calibrate and flag BEFORE binning
+#       L1 = cleaned per cast (native resolution), L2 = merged, calibrated and flagged (native
+#       resolution), L3 = gridded (1 m down-cast bins of calibrated, flagged data)
+#
+# ACTIVE_LAYOUT selects one; the environment variable CTD_PIPELINE_LAYOUT overrides it. The migration
+# glob says which files belong to a product when its folder is shared or moved.
+
+#   key                     v1 (built on)              v2 (agreed)                migrate glob
+PRODUCTS = (
+    ("ctd_raw",              "L0/CTD",                 "L0/CTD",                  "*"),
+    ("suna_raw",             "L0/SUNA",                "L0/SUNA",                 "*"),
+    ("ctd_datcnv",           "L1/CTD",                 "L1/CTD",                  "*"),
+    ("ctd_filter",           "L2/CTD/Filter",          "L1/CTD/Filter",           "*"),
+    ("ctd_align",            "L2/CTD/Align_CTD",       "L1/CTD/Align_CTD",        "*"),
+    ("ctd_celltm",           "L2/CTD/Cell_tm",         "L1/CTD/Cell_tm",          "*"),
+    ("ctd_section",          "L2/CTD/Section",         "L1/CTD/Section",          "*"),
+    ("ctd_loopedit",         "L2/CTD/Loop_Edit",       "L1/CTD/Loop_Edit",        "*"),
+    ("ctd_derived",          "L2/CTD/Derived",         "L1/CTD/Derived",          "*"),
+    ("ctd_1s",               "L2/CTD/CTD_1s",          "L1/CTD/CTD_1s",           "*"),
+    ("suna_l1",              "L1/SUNA",                "L1/SUNA",                 "*"),
+    ("suna_l2",              "L2/SUNA",                "L2/SUNA",                 "*"),
+    ("ctd_bottle",           "L2/CTD/Bottle",          "L2/CTD/Bottle",           "*"),
+    ("nitrate_qc",           "L3",                     "L2/nitrate",              "*_nitrate_QC.csv"),
+    ("suna_calibrated",      "L3/SUNA",                "L2/SUNA_calibrated",      "*"),
+    ("chl_calibrated",       "L3/productivity",        "L2/productivity",         "*"),
+    ("chl_calibrated_noNPQ", "L3/productivity_noNPQ",  "L2/productivity_noNPQ",   "*"),
+    ("ctd_grid_1m_down",     "L2/CTD/CTD_1m_down",     "L3/CTD/CTD_1m_down",      "*"),
+    ("grid_1m_down",         "L3/gridded",             "L3/gridded",              "*"),
+    ("qc_plots",             "L2/CTD/qc_plots",        "_figures/qc",             "*"),
+    ("profile_plots",        "L2/CTD/profile_plots",   "_figures/profiles",       "*"),
+)
+LAYOUTS = {
+    "v1": {key: v1 for key, v1, _v2, _g in PRODUCTS},
+    "v2": {key: v2 for key, _v1, v2, _g in PRODUCTS},
+}
+MIGRATE_GLOB = {key: g for key, _v1, _v2, g in PRODUCTS}
+
+ACTIVE_LAYOUT = "v1"   # flips to "v2" only after every step uses product_dir (docs/DATA_LEVELS.md)
+
+
+def active_layout() -> str:
+    """The layout in force: ``CTD_PIPELINE_LAYOUT`` if set, else ``ACTIVE_LAYOUT``."""
+    lay = os.environ.get("CTD_PIPELINE_LAYOUT", ACTIVE_LAYOUT)
+    if lay not in LAYOUTS:
+        raise ValueError(f"unknown layout {lay!r}; choose one of {sorted(LAYOUTS)}")
+    return lay
+
+
+def product_dir(cruise_id: str, key: str, *, layout: str | None = None, create: bool = False) -> Path:
+    """Folder that holds one named product for a cruise, under the active (or given) layout.
+
+    >>> product_dir("P45_06", "nitrate_qc")            # doctest: +SKIP
+    ...cruises/P45_06/L3                (v1)   or   ...cruises/P45_06/L2/nitrate   (v2)
+    """
+    lay = layout or active_layout()
+    if lay not in LAYOUTS:
+        raise ValueError(f"unknown layout {lay!r}; choose one of {sorted(LAYOUTS)}")
+    try:
+        rel = LAYOUTS[lay][key]
+    except KeyError:
+        raise KeyError(f"unknown product {key!r}; known products: {sorted(LAYOUTS[lay])}") from None
+    path = cruise_dir(cruise_id) / rel
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 if __name__ == "__main__":
     # Quick self-report, useful to confirm the root is found correctly.
     print("project_root     :", project_root())
@@ -163,3 +237,4 @@ if __name__ == "__main__":
         print("xmlcon (shared)  :", find_xmlcon())
     except FileNotFoundError as e:
         print("xmlcon           :", e)
+    print("data-level layout:", active_layout())
