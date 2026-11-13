@@ -37,8 +37,9 @@ import ctd_lib as L
 
 # =============================== SETTINGS ==================================
 CRUISE_ID  = "P45_07"
-BOTTLE_DIR = Path(r"C:\Projects\ctd_pipeline\cruises\P45_07\L2\CTD\Bottle")
-OUTPUT_DIR = Path(r"C:\Projects\ctd_pipeline\cruises\P45_07\metadata\bottle_nitrate")
+from project_paths import cruise_metadata_dir, product_dir   # beside this script, at the repo root
+BOTTLE_DIR = product_dir(CRUISE_ID, "ctd_bottle")
+OUTPUT_DIR = cruise_metadata_dir(CRUISE_ID) / "bottle_nitrate"
 LATITUDE   = 5.0        # for pressure -> depth (Gulf of Guinea ~5 N); refine if you have per-cast lat
 
 # --- Optional lab nitrate join (leave LAB_FILE = None to only build the CTD table) ---

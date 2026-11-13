@@ -21,11 +21,21 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-CTD_ROOT = Path(r"C:\Projects\ctd_pipeline")
+# repo root via project_paths (this line used to hardcode a machine path)
+import sys
+try:
+    _anchor = Path(__file__).resolve()
+except NameError:
+    _anchor = Path.cwd()
+for _p in (_anchor, *_anchor.parents):
+    if (_p / "project_paths.py").exists():
+        sys.path.insert(0, str(_p)); break
+from project_paths import project_root, product_dir
+CTD_ROOT = project_root()
 CRUISE   = "P45_06"
 CASTS    = ["P45_06_CTD_03", "P45_06_CTD_06"]
-ALIGN_DIR= CTD_ROOT / "cruises" / CRUISE / "L2" / "CTD" / "Align_CTD"
-OUT_DIR  = CTD_ROOT / "cruises" / CRUISE / "L2" / "CTD" / "qc_plots"; OUT_DIR.mkdir(parents=True, exist_ok=True)
+ALIGN_DIR= product_dir(CRUISE, "ctd_align")
+OUT_DIR  = product_dir(CRUISE, "qc_plots"); OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 NEAR_SURFACE_DB = 2.0     # "near surface" band
 DESCENT_MIN_DB  = 5.0     # a real descent must pass at least this depth
