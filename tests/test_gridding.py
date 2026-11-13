@@ -33,8 +33,10 @@ def ctd(tmp_path):
     return g.read_sbe_bins(f)
 
 
-def frames(rows):
-    return pd.DataFrame(rows, columns=["pressure_db", "leg", "L1_clean", "no3_qc", "lag_limited"])
+def frames(rows, gap=0.3):
+    f = pd.DataFrame(rows, columns=["pressure_db", "leg", "L1_clean", "no3_qc", "lag_limited"])
+    f.insert(2, "ctd_gap_s", gap)
+    return f
 
 
 def test_reader_gets_sbe_bin_metadata(ctd):
@@ -50,7 +52,7 @@ def test_rows_are_the_sbe_bins_and_ctd_columns_are_untouched(ctd):
     assert list(out["pressure_db"]) == [8.0, 9.0, 10.0, 11.0]
     assert list(out["tv290C"]) == [28.9, 28.8, 28.7, 28.6]
     assert list(out["ctd_n_scans"]) == [5, 6, 6, 5]
-    assert "flag" not in out and "prdM" not in out
+    assert "flag" not in out and "prdM" not in out and list(out["ctd_pressure_db"]) == [8.0, 9.0, 10.0, 11.0]
     assert list(out["sigma-theta00"]) == [22.30, 22.32, 22.34, 22.36]
     assert st.ctd_bins == 4 and (out["nitrate_n"] == 0).all()
 
@@ -73,7 +75,8 @@ def test_nitrate_mean_n_sd_and_every_filter(ctd):
     assert r.loc[9.0, "nitrate_uM"] == 5.0 and r.loc[9.0, "nitrate_n"] == 1 and np.isnan(r.loc[9.0, "nitrate_sd"])
     assert np.isnan(r.loc[10.0, "nitrate_uM"]) and r.loc[10.0, "nitrate_n"] == 0
     assert st.nitrate_used == 3
-    assert st.nitrate_dropped == {"upcast": 1, "not_clean": 1, "no_value": 1, "outside_ctd_bins": 1}
+    assert st.nitrate_dropped == {"upcast": 1, "ctd_not_kept": 0, "not_clean": 1, "no_value": 1, "outside_ctd_bins": 1}
+    assert st.nitrate_n_max == 2
     assert r.loc[8.0, "nitrate_lag_limited"] == True and pd.isna(r.loc[10.0, "nitrate_lag_limited"])  # noqa: E712
 
 
@@ -94,9 +97,31 @@ def test_all_frames_unclean_gives_no_nitrate_and_a_note(ctd):
     assert any("no nitrate frame passed" in n for n in st.notes)
 
 
+def test_frames_where_the_ctd_kept_no_data_are_left_out(ctd):
+    # a 2-minute hold at 10 dbar: Loop Edit flagged the CTD scans, so the 1 s record has no seconds there
+    # and the frames borrowed values from up to 60 s away; only the frame on the CTD record is used
+    df, meta = ctd
+    hold = frames([(10.0, "down", True, 3.0 + 0.01 * i, True) for i in range(120)], gap=np.r_[0.4, np.linspace(1.2, 60, 119)])
+    out, st = g.grid_cast("C1", df, meta, hold)
+    r = out.set_index("pressure_db")
+    assert r.loc[10.0, "nitrate_n"] == 1 and r.loc[10.0, "nitrate_uM"] == 3.0
+    assert st.nitrate_dropped["ctd_not_kept"] == 119
+
+
+def test_mean_pressure_bins_are_keyed_by_centre_and_ambiguous_files_refused(ctd):
+    df, meta = ctd
+    shifted = df.assign(prdM=[8.247, 9.023, 10.002, 10.957])           # P45_07: mean pressure per bin
+    out, st = g.grid_cast("C1", shifted, meta, frames([(9.1, "down", True, 2.0, False)]))
+    assert list(out["pressure_db"]) == [8.0, 9.0, 10.0, 11.0]
+    assert list(out["ctd_pressure_db"]) == [8.247, 9.023, 10.002, 10.957]
+    assert st.ctd_bin_offset_max == pytest.approx(0.247)
+    with pytest.raises(ValueError, match="one-to-one"):
+        g.grid_cast("C1", df.assign(prdM=[8.0, 8.3, 10.0, 11.0]), meta)   # two rows in bin 8
+
+
 def test_old_nitrate_product_is_refused(ctd):
     df, meta = ctd
-    old = pd.DataFrame({"depth_m": [9.0], "L1_clean": [True], "no3_qc": [1.0]})
+    old = pd.DataFrame({"pressure_db": [9.0], "leg": ["down"], "L1_clean": [True], "no3_qc": [1.0]})
     with pytest.raises(ValueError, match="re-run step03"):
         g.grid_cast("C1", df, meta, old)
 
