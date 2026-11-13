@@ -82,14 +82,33 @@ Each phase is its own pull request and keeps the regression baseline green unles
 2. **Centralize.** Each notebook and script asks `product_dir(CRUISE_ID, "<key>")` for its folders instead
    of building `"L2"`/`"L3"` paths. Under v1 every name resolves to today's folder (pinned by
    `test_v1_is_exactly_todays_folders`), so outputs are unchanged and the baseline stays green.
-3. **Flip.** Set `ACTIVE_LAYOUT = "v2"` and run `tools/migrate_layout.py` per cruise: it moves existing
-   files to their v2 folders, checks each file's SHA-256 after the move, refuses to overwrite, writes a
-   move log to `_audit/`, and remaps the frozen baseline. Re-running every step then reproduces byte-identical
-   products in their new places, which the baseline confirms.
+3. **Flip**, in two pull requests. (a) `tools/migrate_layout.py` and the cruise-layout guard in
+   `product_dir`, with `ACTIVE_LAYOUT` still `"v1"`; then migrate the data (below). (b) `ACTIVE_LAYOUT = "v2"`.
+   Re-running every step then reproduces byte-identical products in their new places, which the baseline
+   confirms.
 4. **Science.** The flag-aware Python gridder (calibrated nitrate and chl-a onto the SBE 1 m bins, one L3
    table per cast), step07 applying its calibration at native resolution, and the nitrate source above. These
    change products on purpose; the baseline reports exactly what moved, for review before re-freezing.
 5. **Documentation.** README level table and folder tree, `PROCESSING_PARAMETERS.md`, and the slide.
+
+## Migrating a cruise
+
+```
+python tools/migrate_layout.py                    # dry run: what moves, what no product claims
+python tools/migrate_layout.py --apply            # every cruise to v2 (one cruise: --cruise P45_07)
+python tools/migrate_layout.py --to v1 --apply    # roll back
+```
+
+Files are assigned to products by the registry above (folder plus migrate glob, longest folder wins). A
+cruise is planned in full before anything moves and is refused if any destination already holds different
+content. Each file is copied, its SHA-256 checked against the source, renamed into place, and only then is
+the source deleted; every move is logged to `_audit/layout_migration_<UTC>.csv` as it happens, so an
+interrupted run resumes. Files no product claims are listed and left alone. A cruise that finishes cleanly
+gets `_audit/layout.json`, and the frozen baseline (`tests/baseline/local/`) is remapped with its cruise.
+
+`product_dir()` checks that marker (or, without it, which layout's folders hold files) and raises if the code's
+layout differs from the cruise's, so a step can never write new outputs beside data in the other layout.
+`python project_paths.py` prints each cruise's stored layout.
 
 ## Using it in code
 

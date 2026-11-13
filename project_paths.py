@@ -22,7 +22,9 @@ Pure standard library, no third-party imports.
 """
 from __future__ import annotations
 
+import json
 import os
+import warnings
 from pathlib import Path
 
 # Files/dirs that only exist at the repo root, used to locate it.
@@ -220,10 +222,70 @@ def product_dir(cruise_id: str, key: str, *, layout: str | None = None, create: 
         rel = LAYOUTS[lay][key]
     except KeyError:
         raise KeyError(f"unknown product {key!r}; known products: {sorted(LAYOUTS[lay])}") from None
+    if layout is None:
+        _check_cruise_layout(cruise_id, lay)
     path = cruise_dir(cruise_id) / rel
     if create:
         path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Which layout a cruise's files are actually in
+# ---------------------------------------------------------------------------
+# tools/migrate_layout.py writes this marker after moving a cruise. Without it, the layout is inferred
+# from which layout's own folders hold files. product_dir() refuses to hand out a folder in one layout
+# for a cruise stored in the other, so a step can never scatter new outputs across both.
+LAYOUT_MARKER = Path("_audit") / "layout.json"
+
+
+def _has_files(folder: Path, glob: str) -> bool:
+    if not folder.is_dir():
+        return False
+    found = folder.rglob("*") if glob == "*" else folder.glob(glob)
+    return any(p.is_file() for p in found)
+
+
+def cruise_layout(cruise_id: str) -> str | None:
+    """Layout a cruise's files are stored in: "v1", "v2", "mixed", or None (nothing layout-specific yet).
+
+    The migration marker wins; otherwise each product that moves between layouts is checked for files in
+    its v1 folder and in its v2 folder."""
+    cdir = cruise_dir(cruise_id)
+    marker = cdir / LAYOUT_MARKER
+    if marker.is_file():
+        try:
+            return json.loads(marker.read_text(encoding="utf-8"))["layout"]
+        except (ValueError, KeyError, OSError):
+            pass                                    # unreadable marker: fall back to inference
+    found = set()
+    for _key, v1, v2, glob in PRODUCTS:
+        if v1 == v2:
+            continue
+        if _has_files(cdir / v1, glob):
+            found.add("v1")
+        if _has_files(cdir / v2, glob):
+            found.add("v2")
+    if len(found) > 1:
+        return "mixed"
+    return found.pop() if found else None
+
+
+def _check_cruise_layout(cruise_id: str, lay: str) -> None:
+    stored = cruise_layout(cruise_id)
+    if stored is None or stored == lay:
+        return
+    fix = f"run  python tools/migrate_layout.py --cruise {cruise_id}  (dry run first; docs/DATA_LEVELS.md)"
+    if stored == "mixed":
+        msg = f"cruise {cruise_id} has files in both the v1 and v2 folders; {fix}"
+        if lay == "v1":                             # the status quo before the flip: warn, keep working
+            warnings.warn(msg, stacklevel=3)
+            return
+        raise RuntimeError(msg)
+    raise RuntimeError(
+        f"cruise {cruise_id} is stored in layout {stored} but the code is set to {lay}. Either migrate it "
+        f"({fix.replace('--cruise', f'--to {lay} --cruise')}) or read it as it is by setting the environment "
+        f"variable CTD_PIPELINE_LAYOUT={stored}.")
 
 
 if __name__ == "__main__":
@@ -239,3 +301,6 @@ if __name__ == "__main__":
     except FileNotFoundError as e:
         print("xmlcon           :", e)
     print("data-level layout:", active_layout())
+    croot = project_root() / "cruises"
+    for c in sorted(p.name for p in croot.iterdir() if p.is_dir()) if croot.is_dir() else []:
+        print(f"  {c:12s} stored as {cruise_layout(c)}")
