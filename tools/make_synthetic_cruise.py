@@ -12,6 +12,8 @@ What differs from P45 on purpose:
   * SBE 9plus pressure name prDM; ship heave makes pressure loops, flagged Loop Edit style; cast 3 has NO flag column
   * Bin Average files write the MEAN pressure of each bin (the P45_07 style), not the bin centre
   * bottles give the cast as a number for casts 1 and 3 and as a full cast id (hyphenated cruise) for casts 2 and 4
+  * a bottle firing record (metadata/bottle_nitrate/<CRUISE>_bottle_ctd.csv, as build_bottle_nitrate_table.py
+    writes it from .btl files) at the end of each up-cast stop: bottom, 0.6 and 0.3 of the cast depth, 2 m
 Known truth, so outputs can be checked:
   chlorophyll  chl(z) = 0.05 + 1.2 exp(-((z - 25) / 6)^2) mg/m3, fluorometer raw = 0.04 + 1.6 chl (+ noise sd 0.01)
   nitrate      no3(z) = 2 + 10 (1 + tanh((z - 40) / 8)) umol/L (+ noise sd 0.1)
@@ -75,7 +77,7 @@ def make_cruise(root, cruise: str = "ZZ12_03", lat0: float = -12.4, lon0: float 
     C = Path(root) / "cruises" / cruise
     (C / "_audit").mkdir(parents=True, exist_ok=True)
     (C / "_audit" / "layout.json").write_text('{"layout": "v2"}')
-    summary, chl_rows, no3_rows = [], [], []
+    summary, chl_rows, no3_rows, btl_rows = [], [], [], []
     for num, dlat, dlon, zmax, hour, has_flag in CASTS:
         cast, lat, lon = f"{cruise}_CTD_{num:03d}", lat0 + dlat, lon0 + dlon
         dt = 0.25
@@ -83,8 +85,10 @@ def make_cruise(root, cruise: str = "ZZ12_03", lat0: float = -12.4, lon0: float 
         z_down = np.clip(2.0 + 0.8 * t_down + 0.7 * np.sin(2 * np.pi * t_down / 8.0), 0.5, None)
         z_down = z_down[z_down <= zmax]
         z_up = [np.full(int(20 / dt), z_down[-1])]                   # 20 s at the bottom
+        fires = [len(z_down) + int(20 / dt) - 1]                     # a bottle fired at the end of each stop
         for a, b in ((z_down[-1], 0.6 * zmax), (0.6 * zmax, 0.3 * zmax), (0.3 * zmax, 2.0)):
             z_up += [np.arange(a, b, -dt), np.full(int(30 / dt), b)]  # 1 m/s up, 30 s bottle stops
+            fires.append(sum(len(x) for x in [z_down] + z_up) - 1)
         z = np.concatenate([z_down] + z_up)
         t = np.arange(len(z)) * dt
         p = unesco_pressure(z, lat)
@@ -114,6 +118,10 @@ def make_cruise(root, cruise: str = "ZZ12_03", lat0: float = -12.4, lon0: float 
                            "no3_qc": no3_true(z[idx]) + rng.normal(0, 0.1, len(idx)), "lag_limited": False})
         (C / "L2/nitrate").mkdir(parents=True, exist_ok=True)
         nf.to_csv(C / "L2/nitrate" / f"{cast}_nitrate_QC.csv", index=False)
+        for k, i in enumerate(fires):                                  # what build_bottle_nitrate_table.py writes
+            btl_rows.append(dict(cast_id=cast, bottle_no=k + 1, pressure_dbar=round(float(p[i]), 3),
+                                 depth_m=round(float(z[i]), 3),
+                                 time_utc=f"{start_utc + pd.Timedelta(seconds=float(t[i])):%Y-%m-%d %H:%M:%S}"))
         summary.append(dict(cast=num, station=f"T{num}", date_time_utc_start=f"{start_utc:%Y-%m-%d %H:%M:%S}",
                             latitude_start=round(lat, 4), longitude_start=round(lon, 4)))
         local = start_utc + pd.Timedelta(hours=utc_offset)
@@ -131,6 +139,7 @@ def make_cruise(root, cruise: str = "ZZ12_03", lat0: float = -12.4, lon0: float 
     pd.DataFrame(summary).to_csv(C / "metadata" / f"{cruise}_CTD_cast_summary.csv", index=False)
     pd.DataFrame(chl_rows).to_csv(C / "metadata/chla" / f"{cruise}_chla.csv", index=False)
     pd.DataFrame(no3_rows).to_csv(C / "metadata/bottle_nitrate" / f"{cruise}_bottle_nitrate.csv", index=False)
+    pd.DataFrame(btl_rows).to_csv(C / "metadata/bottle_nitrate" / f"{cruise}_bottle_ctd.csv", index=False)
     return C
 
 
