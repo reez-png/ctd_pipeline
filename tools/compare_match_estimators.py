@@ -144,8 +144,12 @@ def read_suna_frames(path: Path) -> pd.DataFrame:
     return read_suna_frames_df(pd.read_csv(path))
 
 
-def read_suna_frames_df(f: pd.DataFrame) -> pd.DataFrame:
-    vcol = next((c for c in ("no3_stage2", "no3_stage1", "no3_qc") if c in f.columns), None)
+def read_suna_frames_df(f: pd.DataFrame, vcol: str | None = None) -> pd.DataFrame:
+    """Frames as samples. vcol: the nitrate column (default the latest stage present: no3_stage2, no3_stage1,
+    no3_qc)."""
+    if vcol is not None and vcol not in f.columns:
+        raise KeyError(f"no column {vcol!r} in the frame file (columns: {', '.join(f.columns)})")
+    vcol = vcol or next((c for c in ("no3_stage2", "no3_stage1", "no3_qc") if c in f.columns), None)
     clean = _truthy(f["L1_clean"]) if "L1_clean" in f else pd.Series(True, index=f.index)
     leg = f["leg"].astype(str).str.lower() if "leg" in f else pd.Series("down", index=f.index)
     kept = _truthy(f["ctd_scan_kept"]) if "ctd_scan_kept" in f else pd.Series(True, index=f.index)
