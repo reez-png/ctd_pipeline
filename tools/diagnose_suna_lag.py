@@ -130,6 +130,62 @@ def cast_speeds(samples: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def cast_conditions(cruise: str) -> pd.DataFrame:
+    """Per cast, from the nitrate frame files: temperature range on the legs (5th to 95th percentile, degC, so one
+    bad frame does not set it), coldest temperature, and how long the legs took (s)."""
+    rows = []
+    for f in sorted(pp.product_dir(cruise, "nitrate_qc").glob("*_nitrate_QC.csv")):
+        d = pd.read_csv(f, encoding="utf-8-sig")
+        leg = d["leg"].astype(str).str.lower().isin(["down", "up"]) if "leg" in d else pd.Series(True, index=d.index)
+        tc = pd.to_numeric(d.get("temp_c"), errors="coerce")[leg].dropna()
+        tt = CME.parse_utc(d["utc_time"], "frame utc_time")[leg].dropna()
+        rows.append(dict(cast=f.name.replace("_nitrate_QC.csv", ""),
+                         t_range=float(np.percentile(tc, 95) - np.percentile(tc, 5)) if len(tc) > 5 else np.nan,
+                         t_min=float(np.percentile(tc, 5)) if len(tc) > 5 else np.nan,
+                         duration=float((tt.max() - tt.min()).total_seconds()) if len(tt) > 1 else np.nan))
+    return pd.DataFrame(rows)
+
+
+def spearman(x, y, n_perm=10000, seed=0):
+    """Spearman rank correlation and a two-sided permutation p-value (no scipy needed)."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    k = np.isfinite(x) & np.isfinite(y)
+    x, y = x[k], y[k]
+    if len(x) < 5:
+        return np.nan, np.nan, len(x)
+    rx, ry = pd.Series(x).rank().to_numpy(), pd.Series(y).rank().to_numpy()
+    rho = float(np.corrcoef(rx, ry)[0, 1])
+    rng = np.random.default_rng(seed)
+    perm = np.array([np.corrcoef(rx, rng.permutation(ry))[0, 1] for _ in range(n_perm)])
+    return rho, float((np.sum(np.abs(perm) >= abs(rho)) + 1) / (n_perm + 1)), len(x)
+
+
+def conditions_test(T: pd.DataFrame, say=print) -> dict:
+    """Which cast property goes with a long tau? Spearman correlations of tau (time model) with speed, depth,
+    temperature range, coldest temperature and duration across casts, and the correlations among those
+    properties, because they travel together (deep casts are long, cold and, on P45_07, slow). Observational: a
+    correlation here says which candidate the data favour, not what causes the long tau."""
+    ok = T["tau_s"].gt(0.5) & ~T["tau_edge"]
+    if ok.sum() < 5:
+        say(f"\n  cast properties vs tau: too few casts with a tau ({int(ok.sum())}; 5 needed)")
+        return {}
+    props = [("speed", "speed (m/s)"), ("max_depth", "max depth (m)"), ("t_range", "temperature range (degC)"),
+             ("t_min", "coldest temperature (degC)"), ("duration", "duration of the legs (s)")]
+    out = {}
+    say(f"\n  which cast property goes with a long tau? Spearman rank correlation with tau across {int(ok.sum())} casts"
+        " (permutation p):")
+    for c, lab in props:
+        if c in T:
+            rho, p, n = spearman(T.loc[ok, c], T.loc[ok, "tau_s"])
+            out[c] = dict(rho=rho, p=p, n=n)
+            say(f"    {lab:28s} rho {rho:+.2f}  p = {p:.3f}")
+    pairs = [("max_depth", "t_range"), ("max_depth", "duration"), ("max_depth", "speed"), ("t_range", "duration")]
+    say("  how those properties go together (rho): " + ", ".join(
+        f"{a} / {b} {spearman(T.loc[ok, a], T.loc[ok, b], n_perm=0)[0]:+.2f}" for a, b in pairs if a in T and b in T))
+    say("  (observational: these move together across casts, so the strongest correlate is a lead, not a cause)")
+    return out
+
+
 def response(cruise: str, delay: float, say=print) -> dict:
     say(f"  fitting both responses with the delay {delay:+.1f} s applied first ...", flush=True)
     rt = ERT.estimate(cruise, "nitrate", delay=delay, mode="time", verbose=False, write=False)
@@ -138,7 +194,8 @@ def response(cruise: str, delay: float, say=print) -> dict:
          .rename(columns={"tau": "tau_s", "edge": "tau_edge", "rss_min": "rss_time"})
          .merge(rd["table"][["cast", "tau", "edge", "rss_min"]]
                 .rename(columns={"tau": "L_m", "edge": "L_edge", "rss_min": "rss_distance"}), on="cast")
-         .merge(cast_speeds(rt["samples"]), on="cast", how="left"))
+         .merge(cast_speeds(rt["samples"]), on="cast", how="left")
+         .merge(cast_conditions(cruise), on="cast", how="left"))
     say(f"\n  {'cast':16s} {'frames':>6s} {'speed':>6s} {'depth':>6s} {'tau (s)':>8s} {'L (m)':>7s} {'L/speed':>8s}"
         f"   misfit time / distance      [speed: median |w| on the legs, m/s; L/speed: L's time constant, s]")
     for _, r in T.iterrows():
@@ -178,21 +235,29 @@ def response(cruise: str, delay: float, say=print) -> dict:
         say(f"  casts with tau above twice the median ({med_t:.1f} s): "
             + ", ".join(f"{c.split('_')[-1]} ({t:.0f} s, {d:.0f} m, {v:.2f} m/s)"
                         for c, t, d, v in zip(long_["cast"], long_["tau_s"], long_["max_depth"], long_["speed"])))
-        say("  (their depth, not their speed, is what they share if the speeds above are ordinary)")
+    cond = conditions_test(T, say)
     return dict(table=T, slope=sl, rss_ratio=rss_ratio, spread_tau=spread_t, spread_L=spread_L, mode=mode,
-                verdict=verdict, res={"time": rt, "distance": rd})
+                verdict=verdict, res={"time": rt, "distance": rd}, conditions=cond)
 
 
 def diagnose(cruise: str, delay: float | None = None, bottles: bool = True, say=print) -> dict:
     say(f"{cruise}: SUNA timing and response diagnosis\n\n1. CLOCK (step04's water entry and exit)")
     ck = clock(cruise, say)
+    applied = ERT.applied_clock(cruise)
+    a_off = float(np.median(list(applied.values()))) if applied else 0.0
     if delay is None:
         if not ck:
             raise SystemExit("no delay: run step04 for this cruise, or pass --delay")
-        delay = round(ck["entry_median"] * 2) / 2
-        say(f"  -> delay used: {delay:+.1f} s (median water-entry offset, to 0.5 s)")
+        # step04's events are measured on the raw (uncorrected) co-located product, so they are the RAW clock;
+        # if step02/step03 already shifted the frames, only the remainder is applied here
+        delay = round((ck["entry_median"] + a_off) * 2) / 2
+        if applied:
+            say(f"  the nitrate frames already carry step02's clock correction ({a_off:+.1f} s, {len(applied)} casts);"
+                f" remaining delay {ck['entry_median']:+.1f} {a_off:+.1f} = {ck['entry_median'] + a_off:+.1f} s")
+        say(f"  -> delay used: {delay:+.1f} s ({'remainder after the applied correction' if applied else 'median water-entry offset'}, to 0.5 s)")
     else:
-        say(f"  -> delay used: {delay:+.1f} s (given)")
+        say(f"  -> delay used: {delay:+.1f} s (given)"
+            + (f"; NOTE the frames already carry {a_off:+.1f} s from step02, so this is on top of it" if applied else ""))
     say("\n2. RESPONSE (time constant or flushing length?)")
     rp = response(cruise, delay, say)
     out = dict(clock=ck, delay=delay, response=rp)
