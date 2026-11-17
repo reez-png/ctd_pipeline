@@ -79,6 +79,7 @@ _spec.loader.exec_module(CME)
 pp = CME.pp
 sys.path.insert(0, str(CME.REPO / "src"))                 # suncat, also when it is not installed
 import suncat.nitrate.hysteresis as H  # noqa: E402
+import suncat.nitrate.bottle_match as BM  # noqa: E402
 from suncat.nitrate.hysteresis import (SMOOTH, MIN_FRAMES, lag_design, fit_profile, refine_min,  # noqa: E402,F401
                                        search_tau, summarise)
 from suncat.timeutil import elapsed_seconds  # noqa: E402
@@ -112,78 +113,63 @@ def _adopted(cruise):
 
 
 def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
-    """Does correcting the lag make the sensor match the bottles better? Per bottle, on the same bottles:
-      down          the production estimator (step07's down-cast cell median, compare_match_estimators 'down')
+    """Does correcting the lag make the sensor match the bottles better? On the same bottles, paired by the one
+    rule in suncat.nitrate.bottle_match (shared with step02b):
+      down          step07's down-cast cell median over the moving down-cast frames
       N@0           the profile fitted with no lag (both legs averaged, in effect)
       N@tau_cruise  the lag-corrected profile with the cruise's median tau (one constant for the sensor)
-      N@tau_cast    the lag-corrected profile with each cast's own tau
     each read at the bottle depth, then sensor = offset + gain * bottle by OLS, LOOCV RMSE in bottle units, and
-    paired LOOCV squared errors against 'down' (exact sign test; Wilcoxon when scipy is present).
+    paired LOOCV squared errors against 'down' (exact sign test). N@tau_cast, each cast's own tau, is scored on
+    its own line over the bottles it has a value for.
     Then the depth offset (offset_sweep): the lag-corrected profile carries no lag, so reading it at the bottle depth
     + D and scoring each D measures any offset between where the bottle's water came from and the depth recorded
     for it (rosette geometry, firing timing, bottle closure), free of the lag that confounds the same sweep on raw
     legs."""
     unit = "mg/m3" if var == "chl" else "umol/L"
-    bottles = CME.load_bottles(cruise, var)
+    if var == "chl":
+        bottles = CME.load_bottles(cruise, var)
+        src = "step07's chlorophyll calibration table"
+    else:
+        bottles = BM.load_bottles(pp.cruise_dir(cruise) / "metadata" / "bottle_nitrate" / f"{cruise}_bottle_nitrate.csv")
+        src = f"{cruise}_bottle_nitrate.csv"
     tau_c = res["tau_median"]
     d_c = res.get("delay_median", res.get("delay_fixed", 0.0))
     per_cast = res["table"].set_index("cast")["tau"]
-    prof = {}
+    md = res.get("mode", "time")
+    prof, frames = {}, {}
     for cast, (t, zd, y, grid, z_raw) in data.items():
         tc = per_cast.get(cast, np.nan)
-        md = res.get("mode", "time")
-        prof[cast] = dict(grid=grid, n0=fit_profile(t, z_raw, y, grid, 0.0, smooth)[1],
-                          nc=fit_profile(t, z_raw, y, grid, tau_c, smooth, d_c, md)[1],
-                          nk=fit_profile(t, zd, y, grid, tc, smooth, mode=md)[1] if np.isfinite(tc) else None)
-    rows = []
-    for _, b in bottles.iterrows():
-        cast, zb = b["cast"], float(b["depth_m"])
-        rec = dict(cast=cast, depth_m=zb, bottle=float(b["bottle"]))
-        if cast in prof:
-            P = prof[cast]
-            inside = P["grid"][0] <= zb <= P["grid"][-1]
-            s = samples[cast]
-            rec["down"] = CME.cell_median(s[s["down"].astype(bool) & s["moving"].astype(bool)], zb)[0]
-            rec["N@0"] = float(np.interp(zb, P["grid"], P["n0"])) if inside else np.nan
-            rec["N@tau_cruise"] = float(np.interp(zb, P["grid"], P["nc"])) if inside else np.nan
-            rec["N@tau_cast"] = float(np.interp(zb, P["grid"], P["nk"])) if inside and P["nk"] is not None else np.nan
-        rows.append(rec)
-    T = pd.DataFrame(rows)
-    est = [e for e in ("down", "N@0", "N@tau_cruise", "N@tau_cast") if e in T and T[e].notna().sum() >= 5]
-    both = T.dropna(subset=est)
-    out = dict(table=T, fits={}, loocv_rmse={}, paired={})
-    say(f"\n  against the bottles: {len(T)} bottles, {len(both)} with every estimator; tau_cruise = {tau_c:.1f} "
-        f"{'m (flushing length)' if res.get('mode') == 'distance' else 's'}"
-        + (f", delay {d_c:+.1f} s" if d_c else "") + " (N@0: no delay, no lag)")
-    if len(both) < 5 or "down" not in est:
-        say("  too few bottles for a comparison")
+        prof[cast] = {"grid": grid, "N@0": fit_profile(t, z_raw, y, grid, 0.0, smooth)[1],
+                      "N@tau_cruise": fit_profile(t, z_raw, y, grid, tau_c, smooth, d_c, md)[1],
+                      "N@tau_cast": fit_profile(t, zd, y, grid, tc, smooth, mode=md)[1] if np.isfinite(tc) else None}
+        prof[cast]["nc"] = prof[cast]["N@tau_cruise"]                       # offset_sweep reads it
+    for cast, s in samples.items():
+        s = s[s["t"].notna() & s["z"].notna()].sort_values("t")
+        t_s = elapsed_seconds(s["t"])
+        frames[cast] = dict(z=s["z"].to_numpy(float), y=s["v"].to_numpy(float),
+                            down=s["down"].to_numpy(bool) & BM.moving(t_s, s["z"].to_numpy(float)))
+    names = ["N@0", "N@tau_cruise"]
+    T = BM.pair(bottles, frames, prof, names)
+    say(f"\n  against the bottles ({src}); tau_cruise = {tau_c:.1f} "
+        f"{'m (flushing length)' if md == 'distance' else 's'}" + (f", delay {d_c:+.1f} s" if d_c else "")
+        + " (N@0: no delay, no lag)")
+    cmp = BM.compare(T, names)
+    BM.report(cmp, "step03's nitrate frames (merged on the CTD 1 s record; down-cast: scans Loop Edit kept, moving)",
+              unit, say)
+    out = dict(table=T, fits=cmp["fits"], loocv_rmse={e: f["loocv"] for e, f in cmp["fits"].items()},
+               paired={e: dict(median=f["median_d"], better=f["better"], n=f["n"], p_sign=f["p_sign"])
+                       for e, f in cmp["fits"].items() if "p_sign" in f}, n=cmp["n"], left_out=cmp["left_out"])
+    if not cmp["fits"]:
         return out
-    bb = both["bottle"].to_numpy(float)
-    say(f"  {'estimator':13s} {'gain (95% CI)':>27s} {'offset':>8s} {'R2':>6s}  LOOCV RMSE ({unit})")
-    loo = {}
-    for e in est:
-        f = CME.ols(bb, both[e].to_numpy(float))
-        loo[e] = CME.loo_errors(bb, both[e].to_numpy(float))
-        out["fits"][e], out["loocv_rmse"][e] = f, float(np.sqrt(np.nanmean(loo[e] ** 2)))
-        say(f"  {e:13s} {f['gain']:7.4f} ({f['lo']:.4f} to {f['hi']:.4f}) {f['offset']:+8.3f} {f['R2']:6.3f}  "
-            f"{out['loocv_rmse'][e]:.3f}")
-    try:
-        from scipy.stats import wilcoxon
-    except ImportError:
-        wilcoxon = None
-    say("  paired LOOCV squared errors vs down (negative = predicts the bottles better):")
-    for e in est:
-        if e == "down":
-            continue
-        d = loo[e] ** 2 - loo["down"] ** 2
-        p_s = CME.sign_test(d)
-        p_w = float(wilcoxon(d).pvalue) if (wilcoxon is not None and np.any(d != 0)) else float("nan")
-        out["paired"][e] = dict(median=float(np.nanmedian(d)), better=int((d < 0).sum()), n=len(d), p_sign=p_s,
-                                p_wilcoxon=p_w)
-        say(f"    {e:13s} median {np.nanmedian(d):+.3f}, better on {int((d < 0).sum())} of {len(d)}, sign test "
-            f"p = {p_s:.3f}" + (f", Wilcoxon p = {p_w:.3f}" if np.isfinite(p_w) else ""))
-    if "N@tau_cruise" in est:
-        out["offset"] = offset_sweep(both, prof, unit, say=say)
+    Tk = BM.pair(bottles, frames, prof, ["N@tau_cast"])
+    ck = BM.compare(Tk, ["N@tau_cast"])
+    if "N@tau_cast" in ck["fits"]:
+        f = ck["fits"]["N@tau_cast"]
+        out["fits"]["N@tau_cast"], out["loocv_rmse"]["N@tau_cast"] = f, f["loocv"]
+        say(f"  {'N@tau_cast':13s} {f['gain']:7.4f} ({f['lo']:.4f} to {f['hi']:.4f}) {f['offset']:+8.3f} {f['R2']:6.3f}  "
+            f"{f['loocv']:.3f}   (each cast's own tau; {ck['n']} bottles, against down on the same: better on "
+            f"{f['better']} of {f['n']}, sign test p = {f['p_sign']:.3f})")
+    out["offset"] = offset_sweep(cmp["both"], prof, unit, say=say)
     cal = _adopted(cruise) if var == "nitrate" else None
     if cal and cal.get("mode") == "adopted":
         f = out["fits"].get("N@tau_cruise")
