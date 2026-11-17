@@ -188,6 +188,28 @@ def compare(table: pd.DataFrame, names, reference: str = "down", min_n: int = 5)
         d = loo[e] ** 2 - loo[reference] ** 2
         out["fits"][e].update(median_d=float(np.nanmedian(d)), better=int((d < 0).sum()), n=int(len(d)),
                               p_sign=sign_test(d))
+    # robustness: with ~50 bottles and errors of a few umol/L, one bottle can carry half an estimator's squared
+    # error and decide the ranking. The median absolute LOO error and the share of the largest bottle say how
+    # much; the scores with the single most influential bottle left out say whether the ranking survives it.
+    for e in est:
+        sq = loo[e] ** 2
+        out["fits"][e]["mae"] = float(np.nanmedian(np.abs(loo[e])))
+        out["fits"][e]["top_share"] = float(np.nanmax(sq) / np.nansum(sq)) if np.nansum(sq) > 0 else 0.0
+    order = lambda F, key: [e for e in sorted(F, key=lambda e: F[e][key])]
+    out["ranking"] = dict(loocv=order(out["fits"], "loocv"), mae=order(out["fits"], "mae"))
+    j = int(np.nanargmax(np.nanmax(np.vstack([np.abs(loo[e]) for e in est]), axis=0)))
+    if len(both) - 1 >= max(min_n, 3):
+        rest = both.drop(both.index[j])
+        b2, one = rest["bottle"].to_numpy(float), {}
+        for e in est:
+            s2 = rest[e].to_numpy(float)
+            l2 = loo_errors(b2, s2)
+            one[e] = dict(R2=ols(b2, s2)["R2"], loocv=float(np.sqrt(np.nanmean(l2 ** 2))),
+                          mae=float(np.nanmedian(np.abs(l2))))
+        r = both.iloc[j]
+        out["one_out"] = dict(cast=str(r["cast"]), depth_m=float(r["depth_m"]), bottle=float(r["bottle"]),
+                              errors={e: float(loo[e][j]) for e in est}, fits=one)
+        out["ranking"]["one_out"] = order(one, "loocv")
     return out
 
 
@@ -201,11 +223,25 @@ def report(cmp: dict, frames_label: str, unit: str = "umol/L", say=print) -> Non
         say("  too few bottles for a comparison")
         return
     names = list(cmp["fits"])
-    say(f"  {'estimator':13s} {'gain (95% CI)':>27s} {'offset':>8s} {'R2':>6s}  LOOCV RMSE ({unit})")
+    say(f"  {'estimator':13s} {'gain (95% CI)':>27s} {'offset':>8s} {'R2':>6s}  LOOCV RMSE  median |err|  "
+        f"largest bottle's share   ({unit}; errors are leave-one-out, in bottle units)")
     for e in names:
         f = cmp["fits"][e]
-        say(f"  {e:13s} {f['gain']:7.4f} ({f['lo']:.4f} to {f['hi']:.4f}) {f['offset']:+8.3f} {f['R2']:6.3f}  {f['loocv']:.3f}")
+        say(f"  {e:13s} {f['gain']:7.4f} ({f['lo']:.4f} to {f['hi']:.4f}) {f['offset']:+8.3f} {f['R2']:6.3f}  "
+            f"{f['loocv']:10.3f}  {f['mae']:12.3f}  {f['top_share']:21.0%}")
     say(f"  paired LOOCV squared errors vs {names[0]} (negative = predicts the bottles better):")
     for e in names[1:]:
         f = cmp["fits"][e]
         say(f"    {e:13s} median {f['median_d']:+.3f}, better on {f['better']} of {f['n']}, sign test p = {f['p_sign']:.3f}")
+    rk = cmp.get("ranking", {})
+    say("  ranking (best first): by LOOCV RMSE " + " < ".join(rk.get("loocv", [])) + "; by median |err| "
+        + " < ".join(rk.get("mae", [])))
+    oo = cmp.get("one_out")
+    if oo:
+        errs = ", ".join(f"{e} {v:+.2f}" for e, v in oo["errors"].items())
+        say(f"  most influential bottle: {oo['cast']} at {oo['depth_m']:.1f} m, bottle {oo['bottle']:.2f} {unit} "
+            f"(its LOO errors: {errs})")
+        say("    without it: " + "; ".join(f"{e} R2 {f['R2']:.3f}, LOOCV {f['loocv']:.3f}" for e, f in oo["fits"].items()))
+        same = rk.get("one_out") == rk.get("loocv")
+        say("    -> the LOOCV ranking " + ("is unchanged without it" if same else
+            "CHANGES without it: " + " < ".join(rk.get("one_out", [])) + " (the ranking rests on this one bottle)"))
