@@ -427,6 +427,10 @@ def diagnose(cruise: str, delay: float | None = None, bottles: bool = True, say=
         r = rp["res"][rp["mode"]]
         r["delay_fixed"] = delay
         out["bottles"] = ERT.bottle_check(cruise, "nitrate", r, r["samples"], r["data"], ERT.SMOOTH, say)
+        bf = pp.cruise_dir(cruise) / "_audit" / "suna" / f"{cruise}__suna_lag_bottles.csv"
+        bf.parent.mkdir(parents=True, exist_ok=True)
+        out["bottles"]["table"].to_csv(bf, index=False, encoding="utf-8-sig")
+        say(f"  per-bottle table -> {bf.name} (tools/compare_bottle_pairs.py sets it beside step02b's)")
     f = pp.cruise_dir(cruise) / "_audit" / "suna" / f"{cruise}__suna_lag_diagnosis.csv"
     f.parent.mkdir(parents=True, exist_ok=True)
     rp["table"].assign(delay_s=delay).to_csv(f, index=False, encoding="utf-8-sig")
