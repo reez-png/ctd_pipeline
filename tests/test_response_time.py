@@ -133,3 +133,18 @@ def test_lag_correction_matches_the_bottles_better_than_the_down_cast(tmp_path, 
     f = r["fits"]["N@tau_cruise"]
     assert f["lo"] <= 1.0 <= f["hi"] or abs(f["gain"] - 1) < 0.03, f
     assert r["paired"]["N@tau_cruise"]["better"] >= 0.75 * r["paired"]["N@tau_cruise"]["n"]
+
+
+def test_offset_sweep_finds_a_bottle_depth_offset(tmp_path, monkeypatch):
+    # bottles whose water came from 2 m above their recorded depth (a firing or rosette offset), on a lagged sensor:
+    # the lag-corrected profile has no lag left, so the offset sweep must find D = -2 m
+    C = _lagged_cruise(tmp_path, 20.0, noise=0.3)
+    rows = [(f"{CRUISE}_CTD_{n:03d}", z) for n in (2, 3, 4) for z in range(24, 61, 3)]
+    zb = np.array([r[1] for r in rows], float)
+    pd.DataFrame({"cast_id": [r[0] for r in rows], "depth_m": zb, "bottle_no3": GEN.no3_true(zb - 2.0)}
+                 ).to_csv(C / "_audit" / "step03_bottle_matchups.csv", index=False)
+    monkeypatch.setenv("CTD_PIPELINE_ROOT", str(tmp_path))
+    o = ERT.estimate(CRUISE, "nitrate", verbose=False, write=False, bottles=True)["bottles"]["offset"]
+    assert abs(o["best_D"] + 2.0) <= 0.5, o["best_D"]
+    assert o["ci90"][0] - 0.5 <= -2.0 <= o["ci90"][1] + 0.5
+    assert o["q2_best"] > o["q2_at_0"]

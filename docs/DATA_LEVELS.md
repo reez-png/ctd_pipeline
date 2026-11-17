@@ -51,7 +51,7 @@ Bold marks a folder that moves. `v1` is the layout the pipeline was built on; `v
 | `suna_l2` | L2/SUNA | L2/SUNA | step02_merge_ctd_suna (merged 1 s), step02_suna_colocation (co-located) | step02b, step02c, step03 (both), step04 (both), step05_profile_diagnostics, step06 |
 | `ctd_bottle` | L2/CTD/Bottle | L2/CTD/Bottle | step01 (bottle mode) | build_bottle_nitrate_table |
 | `nitrate_qc` (`*_nitrate_QC.csv`) | L3 | **L2/nitrate** | step03_nitrate_qc | baseline |
-| `suna_calibrated` | L3/SUNA | **L2/SUNA_calibrated** | step03_suna_bottle_calibration, step02b (only if its correction works) | step04_plot_profiles, step06 |
+| `suna_calibrated` | L3/SUNA | **L2/SUNA_calibrated** | step03_suna_bottle_calibration (step02b writes only _audit/suna: response time, bottle test, verdict) | step04_plot_profiles, step06 |
 | `chl_calibrated` | L3/productivity | **L2/productivity** | step07_productivity_calibration | baseline |
 | `chl_calibrated_noNPQ` | L3/productivity_noNPQ | **L2/productivity_noNPQ** | step07_noremoval | baseline |
 | `ctd_grid_1m_down` | L2/CTD/CTD_1m_down | **L3/CTD/CTD_1m_down** | step01 (BinAvg 1 m, down-cast) | step00d, step04_plot_profiles, step05_profile_diagnostics, step06, step07 (all three) |

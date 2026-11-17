@@ -66,142 +66,29 @@ _spec = importlib.util.spec_from_file_location("compare_match_estimators", _HERE
 CME = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(CME)
 pp = CME.pp
+sys.path.insert(0, str(CME.REPO / "src"))                 # suncat, also when it is not installed
+import suncat.nitrate.hysteresis as H  # noqa: E402
+from suncat.nitrate.hysteresis import (SMOOTH, MIN_FRAMES, lag_design, fit_profile, refine_min,  # noqa: E402,F401
+                                       search_tau, summarise)
+from suncat.timeutil import elapsed_seconds  # noqa: E402
 
 DEFAULTS = {"nitrate": dict(tau_max=90.0, step=1.0, dz=1.0), "chl": dict(tau_max=12.0, step=0.25, dz=0.5)}
-SMOOTH = 0.1          # curvature penalty weight, in (sensor units per m^2)^-2 relative to one frame's squared error
-MIN_FRAMES = 30       # per leg, with a value
 
 
-# ------------------------------------------------------------------ the model
-def _interp(grid: np.ndarray, z: np.ndarray):
-    k = np.clip(np.searchsorted(grid, z, side="right") - 1, 0, len(grid) - 2)
-    f = np.clip((z - grid[k]) / (grid[k + 1] - grid[k]), 0.0, 1.0)
-    return k, f
-
-
-def lag_design(t: np.ndarray, z: np.ndarray, grid: np.ndarray, tau: float) -> np.ndarray:
-    """Matrix A with y = A @ N: the first-order sensor's reading at each frame for the profile N on grid."""
-    n, G = len(t), len(grid)
-    k, f = _interp(grid, z)
-    A = np.zeros((n, G))
-    rows = np.arange(n)
-    A[rows, k] += 1 - f
-    A[rows, k + 1] += f
-    if tau <= 0:
-        return A
-    M = A                                                  # x_i = M[i] @ N
-    dt = np.diff(t)
-    a = np.exp(-dt / tau)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        r = np.where(dt > 0, tau / dt * (1 - a), 1.0)
-    w1, w0 = 1 - r, r - a                                  # weights on x_i and x_(i-1), both >= 0
-    U = np.empty_like(M)                                   # y_i = a_(i-1) y_(i-1) + U_i,  y_0 = x_0
-    U[0] = M[0]
-    U[1:] = w1[:, None] * M[1:] + w0[:, None] * M[:-1]
-    # the recursion solved in closed form, chunk by chunk: y_i = sum_j exp(-(t_i - t_j) / tau) U_j, a cumulative
-    # sum once each term is scaled by exp(+(t_j - t_s) / tau). Chunks span at most 30 tau so the scale stays below
-    # e^30; all terms are non-negative, so the sums lose no precision. (A row-by-row loop does the same, slowly.)
-    Y = np.empty_like(M)
-    carry, s0 = None, 0
-    while s0 < n:
-        e = int(min(max(np.searchsorted(t, t[s0] + 30.0 * tau, side="right"), s0 + 1), n))
-        E = np.exp(-(t[s0:e] - t[s0]) / tau)[:, None]
-        blk = U[s0:e].copy()
-        if carry is not None:
-            blk[0] += a[s0 - 1] * carry
-        Y[s0:e] = E * np.cumsum(blk / E, axis=0)
-        carry, s0 = Y[e - 1], e
-    return Y
-
-
-def fit_profile(t, z, y, grid, tau, smooth=SMOOTH):
-    """Least-squares profile N for one tau; returns (rss, N, residuals at the frames with a value)."""
-    A = lag_design(t, z, grid, tau)
-    ok = np.isfinite(y)
-    G = len(grid)
-    D = np.zeros((G - 2, G))
-    i = np.arange(G - 2)
-    D[i, i], D[i, i + 1], D[i, i + 2] = 1.0, -2.0, 1.0
-    dz = float(np.median(np.diff(grid)))
-    Ao = A[ok]
-    # normal equations (A'A + smooth D'D / dz^4) N = A'y; the penalty makes the matrix positive definite as long as
-    # two cells hold frames, and a tiny ridge guards the rest
-    H = Ao.T @ Ao + (smooth / dz ** 4) * (D.T @ D)
-    H[np.diag_indices(G)] += 1e-9 * max(float(np.trace(H)) / G, 1e-12)
-    N = np.linalg.solve(H, Ao.T @ y[ok])
-    res = y[ok] - Ao @ N
-    return float(np.sum(res ** 2)), N, res
-
-
-def refine_min(taus: np.ndarray, rss: np.ndarray):
-    """Grid minimum refined by a parabola through it and its neighbours. edge=True when the minimum is the LAST
-    grid value (no minimum within the grid). A minimum at tau = 0 is an estimate (no lag resolved), not an edge."""
-    j = int(np.nanargmin(rss))
-    if j == len(taus) - 1:
-        return float(taus[j]), True
-    if j == 0:
-        return float(taus[0]), False
-    x, yv = taus[j - 1:j + 2], rss[j - 1:j + 2]
-    if np.isnan(yv).any():                        # a neighbour not evaluated (coarse-to-fine search)
-        return float(taus[j]), False
-    den = (x[0] - x[1]) * (x[0] - x[2]) * (x[1] - x[2])
-    A_ = (x[2] * (yv[1] - yv[0]) + x[1] * (yv[0] - yv[2]) + x[0] * (yv[2] - yv[1])) / den
-    B_ = (x[2] ** 2 * (yv[0] - yv[1]) + x[1] ** 2 * (yv[2] - yv[0]) + x[0] ** 2 * (yv[1] - yv[2])) / den
-    if A_ <= 0:
-        return float(taus[j]), False
-    return float(np.clip(-B_ / (2 * A_), x[0], x[2])), False
-
-
+# ------------------------------------------------------------------ the model (suncat.nitrate.hysteresis)
 def cast_tau(s: pd.DataFrame, taus: np.ndarray, dz: float, smooth: float = SMOOTH) -> dict:
-    """tau for one cast's samples (t, z, v, down, up as compare_match_estimators reads them)."""
-    s = s[s["t"].notna() & s["z"].notna()].sort_values("t", kind="stable").copy()
-    # residuals only on the legs (down: Loop Edit kept; up): surface soak and flagged scans carry the sensor's
-    # state forward in time but are not fitted
-    s["v"] = s["v"].where(s["down"].astype(bool) | s["up"].astype(bool))
-    out = dict(n=int(s["v"].notna().sum()), n_down=int((s["v"].notna() & s["down"]).sum()),
-               n_up=int((s["v"].notna() & s["up"]).sum()), tau=np.nan, edge=False, rss0=np.nan, rss_min=np.nan,
-               rms0=np.nan, rms=np.nan, hyst0=np.nan, hyst=np.nan, curve=None)
-    if min(out["n_down"], out["n_up"]) < MIN_FRAMES:
-        out["skip"] = f"too few frames with a value on a leg (down {out['n_down']}, up {out['n_up']})"
-        return out
-    t = (s["t"] - s["t"].iloc[0]).dt.total_seconds().to_numpy(float)
-    z = s["z"].to_numpy(float)
-    y = s["v"].to_numpy(float)
-    grid = np.arange(np.floor(z.min() / dz) * dz, np.ceil(z.max() / dz) * dz + dz / 2, dz)
-    if len(grid) < 4:
-        out["skip"] = "profile shorter than four grid cells"
-        return out
-    # coarse to fine: every 4th tau (and the last), then every tau within 4 steps of the coarse minimum. The RSS
-    # curve is smooth in tau, so this finds the grid minimum at about a third of the cost
-    rss = np.full(len(taus), np.nan)
-    coarse = sorted(set(range(0, len(taus), 4)) | {len(taus) - 1})
-    for j in coarse:
-        rss[j] = fit_profile(t, z, y, grid, taus[j], smooth)[0]
-    jc = int(np.nanargmin(rss))
-    for j in range(max(0, jc - 4), min(len(taus), jc + 5)):
-        if np.isnan(rss[j]):
-            rss[j] = fit_profile(t, z, y, grid, taus[j], smooth)[0]
-    tau_hat, edge = refine_min(taus, rss)
-    ok = np.isfinite(y)
-    is_up, is_dn = s["up"].to_numpy(bool)[ok], s["down"].to_numpy(bool)[ok]
-
-    def hyst(res):                                # mean misfit up minus down: the hysteresis left unexplained
-        return float(np.mean(res[is_up]) - np.mean(res[is_dn])) if is_up.any() and is_dn.any() else np.nan
-
-    r0 = fit_profile(t, z, y, grid, 0.0, smooth)
-    r1 = fit_profile(t, z, y, grid, tau_hat, smooth)
-    n = int(ok.sum())
-    out.update(tau=np.nan if edge else tau_hat, tau_grid=tau_hat, edge=edge, rss0=r0[0], rss_min=r1[0],
-               rms0=float(np.sqrt(r0[0] / n)), rms=float(np.sqrt(r1[0] / n)), hyst0=hyst(r0[2]), hyst=hyst(r1[2]),
-               curve=rss, data=(t, z, y, grid))
-    return out
+    """tau for one cast's samples (t, z, v, down, up as compare_match_estimators reads them). Residuals only on
+    the legs (down: Loop Edit kept; up): surface soak and flagged scans carry the sensor's state forward in time
+    but are not fitted."""
+    s = s[s["t"].notna() & s["z"].notna()]
+    return H.cast_tau(elapsed_seconds(s["t"]), s["z"].to_numpy(float), s["v"].to_numpy(float),
+                      s["down"].to_numpy(bool), s["up"].to_numpy(bool), taus, dz, smooth)
 
 
 # ------------------------------------------------------------------ against the bottles
 def _adopted(cruise):
     """The cruise's stated SUNA calibration (suna_calibration.json), or None."""
     try:
-        sys.path.insert(0, str(CME.REPO / "src"))
         from suncat.suna_cal import load_suna_calibration
         return load_suna_calibration(pp.cruise_dir(cruise))
     except Exception:
@@ -215,7 +102,11 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
       N@tau_cruise  the lag-corrected profile with the cruise's median tau (one constant for the sensor)
       N@tau_cast    the lag-corrected profile with each cast's own tau
     each read at the bottle depth, then sensor = offset + gain * bottle by OLS, LOOCV RMSE in bottle units, and
-    paired LOOCV squared errors against 'down' (exact sign test; Wilcoxon when scipy is present)."""
+    paired LOOCV squared errors against 'down' (exact sign test; Wilcoxon when scipy is present).
+    Then the depth offset (offset_sweep): the lag-corrected profile carries no lag, so reading it at the bottle depth
+    + D and scoring each D measures any offset between where the bottle's water came from and the depth recorded
+    for it (rosette geometry, firing timing, bottle closure), free of the lag that confounds the same sweep on raw
+    legs."""
     unit = "mg/m3" if var == "chl" else "umol/L"
     bottles = CME.load_bottles(cruise, var)
     tau_c = res["tau_median"]
@@ -271,6 +162,8 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
                                 p_wilcoxon=p_w)
         say(f"    {e:13s} median {np.nanmedian(d):+.3f}, better on {int((d < 0).sum())} of {len(d)}, sign test "
             f"p = {p_s:.3f}" + (f", Wilcoxon p = {p_w:.3f}" if np.isfinite(p_w) else ""))
+    if "N@tau_cruise" in est:
+        out["offset"] = offset_sweep(both, prof, unit, say=say)
     cal = _adopted(cruise) if var == "nitrate" else None
     if cal and cal.get("mode") == "adopted":
         f = out["fits"].get("N@tau_cruise")
@@ -280,6 +173,63 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
             say(f"    the lag-corrected fit's gain {f['gain']:.3f} (95% CI {f['lo']:.3f} to {f['hi']:.3f}) "
                 + ("includes" if inside else "excludes") + " it")
     return out
+
+
+OFFSETS = np.arange(-6.0, 6.001, 0.5)
+
+
+def offset_sweep(both: pd.DataFrame, prof: dict, unit: str, deltas=OFFSETS, n_boot: int = 500,
+                 say=print) -> dict:
+    """Read each cast's lag-corrected profile (cruise tau) at bottle depth + D (D > 0 = deeper; beyond the profile's
+    ends the end value is held, the mixed layer or the bottom water) and fit sensor = offset + gain * bottle at each
+    D. Score: cross-validated R2, Q2 = 1 - PRESS / SS (scale-free, as in compare_match_estimators --sweep), with the
+    LOOCV RMSE in bottle units alongside. The best D comes with the D values whose 1 - Q2 is within 10% of its own and a
+    bootstrap over bottles (best D by in-sample R2 in each resample; 90% interval). The best D is chosen on the
+    same bottles it is scored on, so its LOOCV error is optimistic; the interval is the honest part."""
+    bb = both["bottle"].to_numpy(float)
+    V = np.full((len(both), len(deltas)), np.nan)
+    for i, (cast, zb) in enumerate(zip(both["cast"], both["depth_m"])):
+        P = prof[cast]
+        V[i] = np.interp(float(zb) + deltas, P["grid"], P["nc"])
+    rows = []
+    for j, D in enumerate(deltas):
+        v = V[:, j]
+        e = CME.loo_forward_errors(bb, v)
+        q2 = 1.0 - float(np.sum(e ** 2)) / float(np.sum((v - v.mean()) ** 2))
+        rows.append(dict(D=float(D), q2=q2, R2=CME.ols(bb, v)["R2"],
+                         loocv=float(np.sqrt(np.nanmean(CME.loo_errors(bb, v) ** 2)))))
+    T = pd.DataFrame(rows)
+    i = int(T["q2"].idxmax())
+    near = T.loc[(1 - T["q2"]) <= 1.1 * (1 - T.at[i, "q2"]), "D"]     # unexplained share within 10% of the best
+    rng = np.random.default_rng(0)
+    best = []
+    for _ in range(n_boot):
+        k = rng.integers(0, len(bb), len(bb))
+        b = bb[k]
+        if np.ptp(b) == 0:
+            continue
+        r2 = []
+        for j in range(len(deltas)):
+            v = V[k, j]
+            g, o = np.polyfit(b, v, 1)
+            r2.append(1 - np.sum((v - (o + g * b)) ** 2) / max(np.sum((v - v.mean()) ** 2), 1e-12))
+        best.append(deltas[int(np.argmax(r2))])
+    ci = (float(np.percentile(best, 5)), float(np.percentile(best, 95))) if best else (np.nan, np.nan)
+    j0 = int(np.argmin(np.abs(deltas)))
+    say(f"\n  depth offset, lag-corrected profile (cruise tau) read at bottle depth + D (D > 0 = deeper), "
+        f"{len(bb)} bottles:")
+    say(f"     D      Q2      R2   LOOCV RMSE ({unit})")
+    for _, r in T.iterrows():
+        say(f"  {r['D']:+5.1f}  {r['q2']:+.3f}  {r['R2']:.3f}  {r['loocv']:.3f}" + ("   <- best" if r.name == i else ""))
+    say(f"  best D {T.at[i, 'D']:+.1f} m (Q2 {T.at[i, 'q2']:+.3f}; at D = 0: {T.at[j0, 'q2']:+.3f}); unexplained share "
+        f"1 - Q2 within 10% of the best: {near.min():+.1f} to {near.max():+.1f} m; bootstrap over bottles, 90% interval {ci[0]:+.1f} to "
+        f"{ci[1]:+.1f} m")
+    say("  (D < 0: the bottles match water shallower than their recorded depth. With no lag left in the profile this")
+    say("   is the bottle-depth offset itself: rosette geometry, firing timing or bottle closure, not the sensor.)")
+    if T.at[i, "D"] in (deltas.min(), deltas.max()):
+        say("  NOTE: the best D sits at the end of the range: a limit, not an estimate")
+    return dict(table=T, best_D=float(T.at[i, "D"]), q2_best=float(T.at[i, "q2"]), q2_at_0=float(T.at[j0, "q2"]),
+                near=(float(near.min()), float(near.max())), ci90=ci)
 
 
 # ------------------------------------------------------------------ a cruise
@@ -305,7 +255,7 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
     say(f"{cruise} {var}: first-order lag fitted to each cast's down and up profiles together (no bottles)")
     say(f"  tau grid 0 to {tau_max:g} s, step {step:g} s; profile grid {dz:g} m; curvature penalty {smooth:g}"
         + (f"; value column {col}" if col else ""))
-    rows, curves, data, samples = [], [], {}, {}
+    rows, curves, data, samples, full = [], [], {}, {}, {}
     say(f"\n  {'cast':16s} {'frames':>6s} {'down/up':>9s} {'tau (s)':>8s}   RMS misfit {unit}: tau=0 -> tau   "
         f"up-minus-down misfit: tau=0 -> tau")
     for f in files:                                       # each row printed as it is done
@@ -316,6 +266,7 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
         if r["curve"] is not None:
             curves.append(pd.DataFrame({"cast": cast, "tau_s": taus, "rss": r["curve"]}))
             data[cast] = r["data"]
+            full[cast] = r
         if isinstance(r.get("skip"), str):
             say(f"  {cast:16s} skipped: {r['skip']}", flush=True)
             continue
@@ -332,27 +283,9 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
     if len(good) < 3:
         say("  fewer than 3 casts with an estimate: no cruise value")
         return res
-    v = good["tau"].to_numpy(float)
-    rng = np.random.default_rng(0)
-    boot = np.median(rng.choice(v, (n_boot, len(v)), replace=True), axis=1)
-    res.update(tau_median=float(np.median(v)), tau_iqr=(float(np.percentile(v, 25)), float(np.percentile(v, 75))),
-               tau_ci90=(float(np.percentile(boot, 5)), float(np.percentile(boot, 95))), n_casts=len(v))
-    if curves:
-        # pooled: RSS summed over casts. Each cast was searched coarse to fine around its OWN minimum, so first sum
-        # on the taus every cast has, then fill in, for every cast, the taus around the pooled minimum
-        cv = pd.concat(curves)
-        cv = cv[cv["cast"].isin(good["cast"])]
-        W = cv.pivot(index="tau_s", columns="cast", values="rss").reindex(taus)
-        tot = W.sum(axis=1, min_count=W.shape[1])
-        jc = int(np.nanargmin(tot.to_numpy(float)))
-        for j in range(max(0, jc - 4), min(len(taus), jc + 5)):
-            for c in W.columns[W.iloc[j].isna()]:
-                W.iat[j, W.columns.get_loc(c)] = fit_profile(*data[c], taus[j], smooth)[0]
-        tot = W.sum(axis=1, min_count=W.shape[1])
-        res["tau_pooled"], _ = refine_min(taus, tot.to_numpy(float))
-    share = 1 - good["rss_min"].sum() / good["rss0"].sum()
-    res["rss_share_explained"] = float(share)
-    say(f"\n  tau over {len(v)} casts: median {res['tau_median']:.1f} s (IQR {res['tau_iqr'][0]:.1f} to "
+    res.update(summarise(full, taus, smooth, n_boot))
+    share = res["rss_share_explained"]
+    say(f"\n  tau over {res['n_casts']} casts: median {res['tau_median']:.1f} s (IQR {res['tau_iqr'][0]:.1f} to "
         f"{res['tau_iqr'][1]:.1f} s); bootstrap over casts, 90% interval {res['tau_ci90'][0]:.1f} to "
         f"{res['tau_ci90'][1]:.1f} s")
     if "tau_pooled" in res:
