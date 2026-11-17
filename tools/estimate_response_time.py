@@ -228,7 +228,11 @@ def offset_sweep(both: pd.DataFrame, prof: dict, unit: str, deltas=OFFSETS, n_bo
     say("   is the bottle-depth offset itself: rosette geometry, firing timing or bottle closure, not the sensor.)")
     if T.at[i, "D"] in (deltas.min(), deltas.max()):
         say("  NOTE: the best D sits at the end of the range: a limit, not an estimate")
-    return dict(table=T, best_D=float(T.at[i, "D"]), q2_best=float(T.at[i, "q2"]), q2_at_0=float(T.at[j0, "q2"]),
+    if np.isfinite(ci[0]) and (ci[1] - ci[0]) >= 0.5 * (deltas.max() - deltas.min()):
+        say("  NOT DETERMINED: the bootstrap interval covers half the range or more, so these bottles do not fix an")
+        say("  offset (a curve with two optima, or one carried by a few bottles). Read the best D as no estimate.")
+    return dict(table=T, determined=not (np.isfinite(ci[0]) and (ci[1] - ci[0]) >= 0.5 * (deltas.max() - deltas.min())),
+                best_D=float(T.at[i, "D"]), q2_best=float(T.at[i, "q2"]), q2_at_0=float(T.at[j0, "q2"]),
                 near=(float(near.min()), float(near.max())), ci90=ci)
 
 

@@ -147,4 +147,4 @@ def test_offset_sweep_finds_a_bottle_depth_offset(tmp_path, monkeypatch):
     o = ERT.estimate(CRUISE, "nitrate", verbose=False, write=False, bottles=True)["bottles"]["offset"]
     assert abs(o["best_D"] + 2.0) <= 0.5, o["best_D"]
     assert o["ci90"][0] - 0.5 <= -2.0 <= o["ci90"][1] + 0.5
-    assert o["q2_best"] > o["q2_at_0"]
+    assert o["q2_best"] > o["q2_at_0"] and o["determined"]
