@@ -25,7 +25,9 @@ gaps in the 1 s record but not Loop Edit's reversal flags, and a note says so.
 The CTD rows are keyed by their bin: some Bin Average runs write the bin centre as the pressure (P45_06), others
 the mean pressure of the scans in the bin (P45_07). The bin centre goes in pressure_db and the CTD's own value
 in ctd_pressure_db; a CTD pressure half a bin or more from its centre, or two rows in one bin, is refused. Flags travel with the values: the
-nitrate's lag_limited flag, the SUNA clock offset step02 applied, and a non-photochemical-quenching risk
+nitrate's lag_limited flag, the cast's own SUNA response time and slow-response flag (metadata/suna_response.csv,
+via suncat.suna_response; empty when the cruise has none: not assessed), the SUNA clock offset step02 applied,
+and a non-photochemical-quenching risk
 flag for chlorophyll in daylit near-surface bins (the criterion step07 uses to exclude bottles from its fit).
 
 Pure functions on DataFrames plus thin readers; the pipeline notebook resolves the folders.
@@ -149,7 +151,9 @@ def npq_risk(bin_p: np.ndarray, start_time, cfg: GridConfig, lon: float | None =
 # ------------------------------------------------------------------ one cast
 def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame | None = None,
               chl: pd.DataFrame | None = None, suna_offset_s: float | None = None,
-              cfg: GridConfig | None = None, position: dict | None = None) -> tuple[pd.DataFrame, CastStats]:
+              cfg: GridConfig | None = None, position: dict | None = None,
+              response: tuple | None = None) -> tuple[pd.DataFrame, CastStats]:
+    """response: (tau_s, slow) for this cast from metadata/suna_response.csv, or None (not assessed)."""
     cfg = cfg or GridConfig()
     st = CastStats(cast_id)
     if str(meta.get("bintype", "")).lower() != "decibars":
@@ -177,7 +181,8 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
     st.ctd_bins = len(out)
 
     # ---- nitrate (L2 nitrate_qc, one row per SUNA frame)
-    cols = ["nitrate_uM", "nitrate_n", "nitrate_sd", "nitrate_lag_limited", "suna_time_offset_s"]
+    cols = ["nitrate_uM", "nitrate_n", "nitrate_sd", "nitrate_lag_limited", "nitrate_slow_response", "suna_tau_s",
+            "suna_time_offset_s"]
     if nitrate is None or nitrate.empty:
         st.notes.append("no nitrate product")
         for c in cols:
@@ -219,6 +224,12 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
         out["nitrate_sd"] = s["sd"].reindex(idx).to_numpy()
         lag = bool(_flag(nf.loc[use, "lag_limited"]).any()) if "lag_limited" in nf and use.any() else False
         out["nitrate_lag_limited"] = pd.Series(np.where(out["nitrate_n"] > 0, lag, pd.NA), dtype="boolean").to_numpy()
+        # the cast's response, where the cruise states it: flag only bins with a value, as for lag_limited
+        slow = pd.NA if response is None else bool(response[1])
+        out["nitrate_slow_response"] = pd.Series(np.where(out["nitrate_n"] > 0, slow, pd.NA), dtype="boolean").to_numpy()
+        out["suna_tau_s"] = float(response[0]) if response is not None else np.nan
+        if response is not None and response[1]:
+            st.notes.append(f"SLOW SUNA response: tau {response[0]:.1f} s (metadata/suna_response.csv)")
         out["suna_time_offset_s"] = float(suna_offset_s) if suna_offset_s is not None else 0.0
         st.nitrate_bins = int((out["nitrate_n"] > 0).sum())
         st.nitrate_n_median = float(np.median(out.loc[out["nitrate_n"] > 0, "nitrate_n"])) if st.nitrate_bins else np.nan
@@ -260,9 +271,10 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
 # ------------------------------------------------------------------ a cruise
 def grid_cruise(cruise_id: str, ctd_dir: Path, nitrate_dir: Path | None, chl_file: Path | None,
                 suna_l2_dir: Path | None, out_dir: Path | None, cfg: GridConfig | None = None,
-                positions: pd.DataFrame | None = None):
+                positions: pd.DataFrame | None = None, response: dict | None = None):
     """Grid every cast that has a `<cast>_1m_down.cnv`. Returns (tables by cast, stats DataFrame).
-    Writes `<cast>_L3_1m_down.csv` into out_dir when out_dir is given."""
+    Writes `<cast>_L3_1m_down.csv` into out_dir when out_dir is given. response: {cast: (tau_s, slow)} from
+    suncat.suna_response.load_response, or None."""
     cfg = cfg or GridConfig()
     chl = pd.read_csv(chl_file) if chl_file is not None and Path(chl_file).exists() else None
     tables, stats = {}, []
@@ -278,7 +290,8 @@ def grid_cruise(cruise_id: str, ctd_dir: Path, nitrate_dir: Path | None, chl_fil
             if "suna_time_offset_s" in m and m["suna_time_offset_s"].notna().any():
                 offset = float(m["suna_time_offset_s"].iloc[0])
         pos = positions.loc[cast].to_dict() if positions is not None and cast in positions.index else None
-        table, st = grid_cast(cast, ctd, meta, nf, chl, offset, cfg, position=pos)
+        table, st = grid_cast(cast, ctd, meta, nf, chl, offset, cfg, position=pos,
+                              response=(response or {}).get(cast))
         table.insert(0, "cruise_id", cruise_id)
         tables[cast] = table
         stats.append(st.row())

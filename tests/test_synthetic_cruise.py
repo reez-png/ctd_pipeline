@@ -90,3 +90,27 @@ def test_step06_keeps_equatorial_stations(root):
     m = pd.read_csv(root / "cruises" / EQ / "_audit" / "sections" / f"{EQ}__sampling_map.csv", encoding="utf-8-sig")
     assert len(m) == 4 and m["lat"].between(0.0, 1.0).all()                  # 0.10 to 0.45 N, none dropped
     assert (root / "cruises" / EQ / "_audit" / "sections" / f"{EQ}__section__temperature.csv").exists()
+
+
+def test_slow_casts_are_flagged_in_l3_and_marked_on_the_nitrate_section(root):
+    # the cruise states one cast as slow (metadata/suna_response.csv): step08 carries it into the L3 nitrate and
+    # step06 marks it on the nitrate section
+    import sys as _s
+    _s.path.insert(0, str(REPO / "src"))
+    from suncat.suna_response import write_response
+    C = root / "cruises" / EQ
+    casts = [f"{EQ}_CTD_{n:03d}" for n in (1, 2, 3, 4)]
+    write_response(C, pd.DataFrame({"cast_id": casts, "tau_s": [6.0, 30.0, 5.0, 7.0],
+                                    "slow_response": [False, True, False, False]}), "synthetic", overwrite=True)
+    run(root, NB / "step08_grid_l3.ipynb", EQ)
+    for n, slow in ((1, False), (2, True)):
+        d = pd.read_csv(C / "L3" / "gridded" / f"{EQ}_CTD_{n:03d}_L3_1m_down.csv", encoding="utf-8-sig")
+        live = d["nitrate_n"] > 0
+        assert live.any() and d.loc[live, "nitrate_slow_response"].astype(str).str.lower().eq(str(slow).lower()).all()
+        assert d["nitrate_slow_response"][~live].isna().all() and (d["suna_tau_s"] == (30.0 if slow else 6.0)).all()
+    env = dict(os.environ, CTD_PIPELINE_ROOT=str(root), MPLBACKEND="Agg")
+    r = subprocess.run([sys.executable, str(REPO / "tools" / "run_notebook.py"),
+                        str(NB / "step06_hydrographic_sections.ipynb"), "--set", f"CRUISE_ID={EQ}",
+                        "--set", "GROUP_BY=all", "--timeout", "300"], env=env, capture_output=True, text=True, timeout=900)
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-3000:]
+    assert f"slow SUNA response marked: {EQ}_CTD_002" in r.stdout
