@@ -190,8 +190,9 @@ def offset_sweep(both: pd.DataFrame, prof: dict, unit: str, deltas=OFFSETS, n_bo
     """Read each cast's lag-corrected profile (cruise tau) at bottle depth + D (D > 0 = deeper; beyond the profile's
     ends the end value is held, the mixed layer or the bottom water) and fit sensor = offset + gain * bottle at each
     D. Score: cross-validated R2, Q2 = 1 - PRESS / SS (scale-free, as in compare_match_estimators --sweep), with the
-    LOOCV RMSE in bottle units alongside. The best D comes with the D values whose 1 - Q2 is within 10% of its own and a
-    bootstrap over bottles (best D by in-sample R2 in each resample; 90% interval). The best D is chosen on the
+    LOOCV RMSE in bottle units alongside. The best D comes with the D values whose 1 - Q2 is within 10% of its own and
+    a bootstrap (best D by in-sample R2 in each resample; 90% interval) over CASTS, whole casts resampled, since
+    bottles on one cast share errors; the bootstrap over single bottles is printed beside it and is too narrow. The best D is chosen on the
     same bottles it is scored on, so its LOOCV error is optimistic; the interval is the honest part."""
     bb = both["bottle"].to_numpy(float)
     V = np.full((len(both), len(deltas)), np.nan)
@@ -208,20 +209,32 @@ def offset_sweep(both: pd.DataFrame, prof: dict, unit: str, deltas=OFFSETS, n_bo
     T = pd.DataFrame(rows)
     i = int(T["q2"].idxmax())
     near = T.loc[(1 - T["q2"]) <= 1.1 * (1 - T.at[i, "q2"]), "D"]     # unexplained share within 10% of the best
-    rng = np.random.default_rng(0)
-    best = []
-    for _ in range(n_boot):
-        k = rng.integers(0, len(bb), len(bb))
+    def _best(k):
         b = bb[k]
         if np.ptp(b) == 0:
-            continue
+            return None
         r2 = []
         for j in range(len(deltas)):
             v = V[k, j]
             g, o = np.polyfit(b, v, 1)
             r2.append(1 - np.sum((v - (o + g * b)) ** 2) / max(np.sum((v - v.mean()) ** 2), 1e-12))
-        best.append(deltas[int(np.argmax(r2))])
-    ci = (float(np.percentile(best, 5)), float(np.percentile(best, 95))) if best else (np.nan, np.nan)
+        return deltas[int(np.argmax(r2))]
+
+    def _ci(best):
+        best = [x for x in best if x is not None]
+        return (float(np.percentile(best, 5)), float(np.percentile(best, 95))) if best else (np.nan, np.nan)
+
+    rng = np.random.default_rng(0)
+    ci_b = _ci([_best(rng.integers(0, len(bb), len(bb))) for _ in range(n_boot)])
+    # bottles on one cast share its errors (its profile, its firing, its rosette motion), so resampling bottles one
+    # at a time overstates the information; resampling whole casts is the honest interval
+    casts = both["cast"].astype(str).to_numpy()
+    groups = [np.flatnonzero(casts == c) for c in pd.unique(casts)]
+    n_casts = len(groups)
+    if n_casts >= 5:
+        ci = _ci([_best(np.concatenate([groups[g] for g in rng.integers(0, n_casts, n_casts)])) for _ in range(n_boot)])
+    else:
+        ci = (np.nan, np.nan)
     j0 = int(np.argmin(np.abs(deltas)))
     say(f"\n  depth offset, lag-corrected profile (cruise tau) read at bottle depth + D (D > 0 = deeper), "
         f"{len(bb)} bottles:")
@@ -229,18 +242,24 @@ def offset_sweep(both: pd.DataFrame, prof: dict, unit: str, deltas=OFFSETS, n_bo
     for _, r in T.iterrows():
         say(f"  {r['D']:+5.1f}  {r['q2']:+.3f}  {r['R2']:.3f}  {r['loocv']:.3f}" + ("   <- best" if r.name == i else ""))
     say(f"  best D {T.at[i, 'D']:+.1f} m (Q2 {T.at[i, 'q2']:+.3f}; at D = 0: {T.at[j0, 'q2']:+.3f}); unexplained share "
-        f"1 - Q2 within 10% of the best: {near.min():+.1f} to {near.max():+.1f} m; bootstrap over bottles, 90% interval {ci[0]:+.1f} to "
-        f"{ci[1]:+.1f} m")
+        f"1 - Q2 within 10% of the best: {near.min():+.1f} to {near.max():+.1f} m")
+    say(f"  90% bootstrap intervals for the best D: over casts ({n_casts} casts, the honest one) "
+        + (f"{ci[0]:+.1f} to {ci[1]:+.1f} m" if np.isfinite(ci[0]) else "not computed (fewer than 5 casts)")
+        + f"; over bottles {ci_b[0]:+.1f} to {ci_b[1]:+.1f} m (too narrow: bottles on a cast share errors)")
+    if np.isfinite(ci[0]):
+        say("  the cast interval " + ("EXCLUDES" if (ci[0] > 0 or ci[1] < 0) else "includes") + " D = 0")
     say("  (D < 0: the bottles match water shallower than their recorded depth. With no lag left in the profile this")
     say("   is the bottle-depth offset itself: rosette geometry, firing timing or bottle closure, not the sensor.)")
     if T.at[i, "D"] in (deltas.min(), deltas.max()):
         say("  NOTE: the best D sits at the end of the range: a limit, not an estimate")
+    if not np.isfinite(ci[0]):
+        ci = ci_b                                                     # too few casts: the bottle interval decides
     if np.isfinite(ci[0]) and (ci[1] - ci[0]) >= 0.5 * (deltas.max() - deltas.min()):
         say("  NOT DETERMINED: the bootstrap interval covers half the range or more, so these bottles do not fix an")
         say("  offset (a curve with two optima, or one carried by a few bottles). Read the best D as no estimate.")
     return dict(table=T, determined=not (np.isfinite(ci[0]) and (ci[1] - ci[0]) >= 0.5 * (deltas.max() - deltas.min())),
                 best_D=float(T.at[i, "D"]), q2_best=float(T.at[i, "q2"]), q2_at_0=float(T.at[j0, "q2"]),
-                near=(float(near.min()), float(near.max())), ci90=ci)
+                near=(float(near.min()), float(near.max())), ci90=ci, ci90_bottles=ci_b, n_casts=n_casts)
 
 
 # ------------------------------------------------------------------ a cruise

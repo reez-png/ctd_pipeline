@@ -187,3 +187,21 @@ def test_when_the_split_is_not_resolved_the_sum_still_is():
         res.append((r["delay"], r["tau"]))
     sums = [a + b for a, b in res]
     assert all(17.0 <= s_ <= 26.0 for s_ in sums), res
+
+
+def test_offset_interval_resamples_whole_casts():
+    # each cast carries its own depth offset (firing, motion) and its bottles share it: resampling single bottles
+    # pretends to more information than there is, so the cast interval must be the wider one
+    rng = np.random.default_rng(1)
+    grid = np.arange(0.0, 101.0)
+    prof, rows = {}, []
+    for c in range(8):
+        cast = f"C_{c:02d}"
+        prof[cast] = {"grid": grid, "nc": 5 + 8 * (1 + np.tanh((grid - 30 - 3 * rng.normal()) / 5))}
+        off = -1.0 + 2.5 * rng.normal()
+        for zb in (15.0, 22.0, 27.0, 31.0, 36.0, 45.0):
+            rows.append(dict(cast=cast, depth_m=zb,
+                             bottle=float(np.interp(zb + off, grid, prof[cast]["nc"])) + rng.normal(0, 0.2)))
+    o = ERT.offset_sweep(pd.DataFrame(rows), prof, "umol/L", say=lambda *a, **k: None)
+    w_cast, w_bot = o["ci90"][1] - o["ci90"][0], o["ci90_bottles"][1] - o["ci90_bottles"][0]
+    assert o["n_casts"] == 8 and w_cast > w_bot, (o["ci90"], o["ci90_bottles"])
