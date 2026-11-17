@@ -64,3 +64,21 @@ def test_compare_scores_and_paired_test():
     f = c["fits"]["good"]
     assert abs(f["gain"] - 0.9) < 0.02 and f["R2"] > 0.99 and f["loocv"] < c["fits"]["down"]["loocv"]
     assert f["better"] > 30 and f["p_sign"] < 0.001
+
+
+def test_one_bottle_that_decides_the_ranking_is_named():
+    # two estimators equally good on 39 bottles; one bottle that 'down' gets badly wrong makes it rank last.
+    # The report must name that bottle and say the ranking changes without it
+    rng = np.random.default_rng(1)
+    b = np.linspace(0, 20, 40)
+    T = pd.DataFrame({"cast": "C", "depth_m": np.arange(40.0), "bottle": b,
+                      "down": 0.9 * b + rng.normal(0, 0.3, 40), "A": 0.9 * b + rng.normal(0, 0.4, 40), "reason": ""})
+    T.loc[7, "down"] += 15.0
+    c = BM.compare(T, ["A"])
+    assert c["one_out"]["depth_m"] == 7.0 and c["fits"]["down"]["top_share"] > 0.8
+    assert c["ranking"]["loocv"] == ["A", "down"] and c["ranking"]["one_out"] == ["down", "A"]
+    assert c["fits"]["down"]["mae"] < 0.5 * c["fits"]["down"]["loocv"]      # the median barely notices one bottle
+    lines = []
+    BM.report(c, "synthetic", say=lines.append)
+    text = "\n".join(lines)
+    assert "most influential bottle: C at 7.0 m" in text and "CHANGES without it: down < A" in text
