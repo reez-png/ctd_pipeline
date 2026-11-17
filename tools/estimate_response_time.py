@@ -257,6 +257,21 @@ def offset_sweep(both: pd.DataFrame, prof: dict, unit: str, deltas=OFFSETS, n_bo
 
 
 # ------------------------------------------------------------------ a cruise
+def applied_clock(cruise: str) -> dict:
+    """{cast: offset_s} that step02/step03 already applied to the nitrate frames' times (the provenance column
+    suna_time_offset_s, written only when an offset was applied). A delay given here on top of it would count the
+    clock twice."""
+    out = {}
+    for f in sorted(pp.product_dir(cruise, "nitrate_qc").glob("*_nitrate_QC.csv")):
+        try:
+            head = pd.read_csv(f, nrows=1, encoding="utf-8-sig")
+        except Exception:
+            continue
+        if "suna_time_offset_s" in head.columns and pd.notna(head["suna_time_offset_s"].iloc[0]):
+            out[f.name.replace("_nitrate_QC.csv", "")] = float(head["suna_time_offset_s"].iloc[0])
+    return out
+
+
 def read_cast(cruise: str, var: str, cast_file: Path, col: str | None):
     if var == "chl":
         return CME.read_ctd_scans(cast_file)
@@ -287,6 +302,14 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
         say("  RESPONSE PER METRE TRAVELLED: tau is a flushing length L (m); the sensor relaxes as the package moves "
             "and is frozen while it stops (effective time constant L / |w|)")
     delays = np.arange(delay_min, delay_max + 1.0 / 2, 1.0) if fit_delay else None
+    applied = applied_clock(cruise) if var == "nitrate" else {}
+    if applied:
+        vals = sorted(set(applied.values()))
+        say(f"  NOTE the frames already carry a clock correction from step02 ({vals[0]:+g}"
+            + (f" to {vals[-1]:+g}" if len(vals) > 1 else "") + f" s, {len(applied)} casts): any delay given or fitted "
+            "here is what remains on top of it")
+        if delay:
+            say(f"  WARNING --delay {delay:+g} s on corrected frames counts the clock twice unless it is a residual")
     if fit_delay:
         say(f"  DELAY AND RESPONSE fitted together: delay grid {delay_min:+g} to {delay_max:+g} s (a pure delay shifts "
             "the record; a response also smooths it)")
@@ -316,7 +339,8 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
             + (f"   [{r['tau_only']:.1f}]" if fit_delay else ""), flush=True)
     t = pd.DataFrame(rows)
     good = t[t["tau"].notna()]
-    res = dict(table=t, taus=taus, mode=mode, unit_tau=tu, samples=samples, data=data, full=full)
+    res = dict(table=t, taus=taus, mode=mode, unit_tau=tu, samples=samples, data=data, full=full,
+               applied_clock=applied)
     n_edge = int(t["edge"].sum())
     if n_edge:
         say(f"\n  {n_edge} cast(s) at the end of the grid (EDGE): no minimum below {tau_max:g} {tu}; left out. "

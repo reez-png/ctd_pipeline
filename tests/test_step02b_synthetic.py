@@ -35,7 +35,7 @@ GEN = _load("make_synthetic_cruise", "tools/make_synthetic_cruise.py")
 TRT = _load("test_response_time", "tests/test_response_time.py")       # its continuous-lag integrator
 
 
-def _cruise(root: Path, bottle_noise: float) -> Path:
+def _cruise(root: Path, bottle_noise: float, clock_s: float = 0.0) -> Path:
     """Synthetic cruise with step02's L2 co-located frames (raw SUNA = truth seen through a 25 s lag, + noise),
     bottles on the cruise's stated scale (adopted a1 = 0.89, a0 = -0.39), and that calibration file."""
     C = GEN.make_cruise(root, CRUISE)
@@ -49,7 +49,8 @@ def _cruise(root: Path, bottle_noise: float) -> Path:
         t = (tt - tt.iloc[0]).dt.total_seconds().to_numpy(float)
         z = d["depth_m"].to_numpy(float)
         truth = lambda zz: a0 + a1 * GEN.no3_true(zz)                     # the sensor's raw scale
-        raw = TRT.lagged(t, z, TAU, truth) + rng.normal(0, 0.3, len(d))
+        zc = np.interp(t - clock_s, t, z)                 # a SUNA clock clock_s late: frame t carries z(t - clock_s)
+        raw = TRT.lagged(t, zc, TAU, truth) + rng.normal(0, 0.3, len(d))
         rows.append(pd.DataFrame({"time_utc": d["utc_time"], "nitrate_uM": raw, "L1_clean": True,
                                   "pressure_db": d["pressure_db"], "cast": cast, "in_cast": True, "leg": d["leg"]}))
         for zb in range(20, 61, 5):
@@ -100,3 +101,18 @@ def test_step02b_keeps_the_calibration_when_the_bottles_scatter(tmp_path):
     s = _summary(C)
     assert abs(s["tau_median"] - TAU) <= 1.5 and s["lag_explained"]
     assert not s["pairs_usable"] and s["fits"]["N@tau"]["R2"] < 0.90
+
+
+def test_step02b_applies_the_cruise_clock_offset_first(tmp_path):
+    # the SUNA clock is 16 s late and the cruise says so (suna_time_offsets.csv, -16 s): step02b corrects the
+    # depths first and finds the sensor's own 25 s, not 16 + 25
+    import sys
+    sys.path.insert(0, str(REPO / "src"))
+    from suncat.suna_clock import write_offsets
+    C = _cruise(tmp_path, bottle_noise=0.05, clock_s=16.0)
+    casts = [f.name.replace("_nitrate_QC.csv", "") for f in (C / "L2/nitrate").glob("*_nitrate_QC.csv")]
+    write_offsets(C, casts, -16.0, "synthetic: 16 s late")
+    _run(tmp_path)
+    s = _summary(C)
+    assert abs(s["tau_median"] - TAU) <= 1.5, s["tau_median"]
+    assert s["clock_offsets_s"] == [-16.0] and "16 s late" in s["clock"]
