@@ -155,7 +155,8 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
         f"{'m (flushing length)' if md == 'distance' else 's'}" + (f", delay {d_c:+.1f} s" if d_c else "")
         + " (N@0: no delay, no lag)")
     cmp = BM.compare(T, names)
-    BM.report(cmp, "step03's nitrate frames (merged on the CTD 1 s record; down-cast: scans Loop Edit kept, moving)",
+    BM.report(cmp, "the CTD scans (fluorescence; down-cast moving)" if var == "chl" else
+              "step03's nitrate frames (merged on the CTD 1 s record; down-cast: scans Loop Edit kept, moving)",
               unit, say)
     out = dict(table=T, fits=cmp["fits"], loocv_rmse={e: f["loocv"] for e, f in cmp["fits"].items()},
                paired={e: dict(median=f["median_d"], better=f["better"], n=f["n"], p_sign=f["p_sign"])
