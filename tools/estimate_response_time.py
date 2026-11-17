@@ -132,6 +132,7 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
     else:
         bottles = BM.load_bottles(pp.cruise_dir(cruise) / "metadata" / "bottle_nitrate" / f"{cruise}_bottle_nitrate.csv")
         src = f"{cruise}_bottle_nitrate.csv"
+    slow = BM.slow_exclusions(pp.cruise_dir(cruise)) if var == "nitrate" else {}
     tau_c = res["tau_median"]
     d_c = res.get("delay_median", res.get("delay_fixed", 0.0))
     per_cast = res["table"].set_index("cast")["tau"]
@@ -149,7 +150,7 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
         frames[cast] = dict(z=s["z"].to_numpy(float), y=s["v"].to_numpy(float),
                             down=s["down"].to_numpy(bool) & BM.moving(t_s, s["z"].to_numpy(float)))
     names = ["N@0", "N@tau_cruise"]
-    T = BM.pair(bottles, frames, prof, names)
+    T = BM.pair(bottles, frames, prof, names, exclude=slow)
     say(f"\n  against the bottles ({src}); tau_cruise = {tau_c:.1f} "
         f"{'m (flushing length)' if md == 'distance' else 's'}" + (f", delay {d_c:+.1f} s" if d_c else "")
         + " (N@0: no delay, no lag)")
@@ -161,7 +162,7 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
                        for e, f in cmp["fits"].items() if "p_sign" in f}, n=cmp["n"], left_out=cmp["left_out"])
     if not cmp["fits"]:
         return out
-    Tk = BM.pair(bottles, frames, prof, ["N@tau_cast"])
+    Tk = BM.pair(bottles, frames, prof, ["N@tau_cast"], exclude=slow)
     ck = BM.compare(Tk, ["N@tau_cast"])
     if "N@tau_cast" in ck["fits"]:
         f = ck["fits"]["N@tau_cast"]

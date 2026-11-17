@@ -15,6 +15,10 @@ against 0.820) for the same estimator. Here is the one rule:
             does not count.
   profiles  each fitted profile (N@0, N@tau, ...) read at the bottle depth by linear interpolation, only where
             the bottle lies within that cast's profile grid (no extrapolation).
+  slow      bottles on casts the cruise lists as slow (metadata/suna_response.csv, suncat.suna_response) are
+            left out with that reason: one cruise tau is known to be wrong there, so the lag-corrected estimate
+            is not a fair test of the lag model (on P45_07 one such bottle, cast 09 at 20.9 m, decided the
+            ranking on its own). Their values are kept in the table.
   included  a bottle enters the comparison when EVERY required estimator has a value for it; each bottle that
             does not gets a reason (no frames on this cast, no profile for this cast, outside the profile's
             depth range, no moving down-cast frame within +-WIN_M), so a count can be traced.
@@ -94,11 +98,21 @@ def down_value(z, y, use, z0: float, win: float = WIN_M) -> tuple[float, int]:
 
 
 # ------------------------------------------------------------------ pairing
-def pair(bottles: pd.DataFrame, frames: dict, profiles: dict, names, win: float = WIN_M) -> pd.DataFrame:
+def slow_exclusions(cruise_dir) -> dict:
+    """{cast: reason} for the casts metadata/suna_response.csv lists as slow; {} when there is no such file."""
+    from suncat.suna_response import load_response
+    return {c: f"slow SUNA response (tau {tau:.0f} s, suna_response.csv)" if np.isfinite(tau)
+            else "slow SUNA response (suna_response.csv)"
+            for c, (tau, slow) in load_response(cruise_dir).items() if slow}
+
+
+def pair(bottles: pd.DataFrame, frames: dict, profiles: dict, names, win: float = WIN_M,
+         exclude: dict | None = None) -> pd.DataFrame:
     """One row per bottle: cast, depth_m, bottle, down, one column per profile name, and `reason` (empty when
     every estimator has a value, else why the bottle is left out).
     frames:   {cast: dict(z, y, down)} with down already limited to the moving down-cast frames
-    profiles: {cast: dict(grid, <name>: values on grid, ...)}; a name whose values are None is missing"""
+    profiles: {cast: dict(grid, <name>: values on grid, ...)}; a name whose values are None is missing
+    exclude:  {cast: reason} for casts left out whatever their values (slow_exclusions); values still filled"""
     rows = []
     for _, b in bottles.iterrows():
         cast = match_cast(b["cast"], frames.keys()) or str(b["cast"])     # a cast number names its cast id
@@ -123,6 +137,8 @@ def pair(bottles: pd.DataFrame, frames: dict, profiles: dict, names, win: float 
                 rec["reason"] = REASONS[1]
         if not rec["reason"] and not np.isfinite(rec["down"]):
             rec["reason"] = f"no moving down-cast frame within +-{win:g} m"
+        if not rec["reason"] and exclude and cast in exclude:
+            rec["reason"] = exclude[cast]
         rows.append(rec)
     return pd.DataFrame(rows, columns=["cast", "depth_m", "bottle", "down", *names, "reason"])
 

@@ -82,3 +82,19 @@ def test_one_bottle_that_decides_the_ranking_is_named():
     BM.report(c, "synthetic", say=lines.append)
     text = "\n".join(lines)
     assert "most influential bottle: C at 7.0 m" in text and "CHANGES without it: down < A" in text
+
+
+def test_slow_casts_are_left_out_with_their_reason(tmp_path):
+    from suncat.suna_response import write_response
+    write_response(tmp_path, pd.DataFrame({"cast_id": ["C_01", "C_02"], "tau_s": [27.0, 6.0],
+                                           "slow_response": [True, False]}), "synthetic")
+    ex = BM.slow_exclusions(tmp_path)
+    assert ex == {"C_01": "slow SUNA response (tau 27 s, suna_response.csv)"}
+    assert BM.slow_exclusions(tmp_path / "none") == {}
+    grid = np.arange(0.0, 51.0)
+    fr = {c: dict(z=grid, y=grid / 10, down=np.ones_like(grid, bool)) for c in ("C_01", "C_02")}
+    pr = {c: {"grid": grid, "A": grid / 10} for c in ("C_01", "C_02")}
+    T = BM.pair(pd.DataFrame({"cast": ["C_01", "C_02"], "depth_m": [20.0, 20.0], "bottle": [2.0, 2.0]}), fr, pr,
+                ["A"], exclude=ex)
+    assert T.loc[0, "reason"] == ex["C_01"] and T.loc[0, "A"] == pytest.approx(2.0)   # values kept for reference
+    assert T.loc[1, "reason"] == ""
