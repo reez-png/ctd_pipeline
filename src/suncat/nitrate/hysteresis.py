@@ -15,7 +15,7 @@ the interquartile range, a bootstrap over casts (90% interval), and a pooled est
 Known bias: water displaced by d metres between the legs biases tau by about d / (v_down + v_up).
 
 The first-order response is the model commonly used for sensor response-time correction (for oxygen optodes,
-e.g. Bittig et al., 2014, Front. Mar. Sci.). The difference here is that it is run FORWARD (profile -> reading)
+e.g. Bittig et al., 2014, Limnol. Oceanogr.: Methods 12, 617-636). The difference here is that it is run FORWARD (profile -> reading)
 and fitted, not inverted: inverting it (y + tau dy/dt) amplifies frame noise by about tau/dt, which at tau = 30 s
 and 1 s frames swamps the signal.
 """
