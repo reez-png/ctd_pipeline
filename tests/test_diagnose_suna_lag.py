@@ -114,3 +114,38 @@ def test_a_clock_already_applied_is_not_counted_twice(tmp_path, monkeypatch):
     out = DSL.diagnose(CRUISE, bottles=False, say=lambda *a, **k: None)
     assert out["delay"] == 0.0
     assert np.allclose(out["response"]["table"]["tau_s"], 8.0, atol=1.5)
+
+
+def _start_cast(tau, amp, T0=60.0, seed=0, zmax=120.0, v=0.5, noise=0.2):
+    """One cast at v m/s down and up (20 s stop at the bottom), a tanh nitracline at 30 m seen through a tau s
+    response, plus a transient amp * exp(-t / T0) from immersion (water or air left in the path)."""
+    nd = int(zmax / v)
+    z = np.concatenate([np.linspace(1, zmax, nd), np.full(20, zmax), np.linspace(zmax, 1, nd)])
+    t = np.arange(len(z), dtype=float)
+    y = _response(t, z, "time", tau, 0.0, lambda q: 5 + 8 * (1 + np.tanh((q - 30) / 6)))
+    y = y + amp * np.exp(-t / T0) + np.random.default_rng(seed).normal(0, noise, len(t))
+    down = np.arange(len(t)) < nd
+    return pd.DataFrame({"t": pd.Timestamp("2026-08-01", tz="UTC") + pd.to_timedelta(t, unit="s"), "z": z, "v": y,
+                         "down": down, "up": ~down})
+
+
+def test_a_start_transient_is_told_from_a_slow_sensor():
+    taus = np.arange(0, 90.5, 1.0)
+    # a 6 s sensor with a -6 umol/L transient over 60 s: the lag alone reads it as a longer tau; with the
+    # transient allowed, tau is the sensor's 6 s and the amplitude is recovered
+    r = DSL.start_of_cast(_start_cast(6.0, -6.0), taus)
+    assert r["tau_lag"] > 9.0 and abs(r["tau_tr"] - 6.0) <= 0.5 and abs(r["tr_amp"] + 6.0) <= 0.5, r
+    assert r["rms_tr"] < 0.5 * r["rms_lag"]
+    # a truly slow (25 s) sensor with no transient keeps its tau, and the transient comes out near zero
+    r = DSL.start_of_cast(_start_cast(25.0, 0.0), taus)
+    assert abs(r["tau_tr"] - 25.0) <= 1.0 and abs(r["tr_amp"]) < 0.5, r
+
+
+def test_idle_times_and_first_cast_of_the_day():
+    t0 = pd.Timestamp("2026-08-01 10:00", tz="UTC")
+    mk = lambda start, mins: pd.DataFrame({"t": start + pd.to_timedelta(np.arange(0, mins * 60, 60), unit="s")})
+    I = DSL.idle_times({"a": mk(t0, 10), "b": mk(t0 + pd.Timedelta(hours=1), 10),
+                        "c": mk(t0 + pd.Timedelta(hours=25), 10)}).set_index("cast")
+    assert np.isnan(I.loc["a", "idle_h"]) and I.loc["a", "first_of_day"]
+    assert abs(I.loc["b", "idle_h"] - (1 - 9 / 60)) < 1e-9 and not I.loc["b", "first_of_day"]
+    assert abs(I.loc["c", "idle_h"] - (24 - 9 / 60)) < 1e-9 and I.loc["c", "first_of_day"]
