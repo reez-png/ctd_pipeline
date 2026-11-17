@@ -5,6 +5,8 @@ together, without bottles.
     python tools/estimate_response_time.py P45_07 --var chl            chlorophyll fluorescence (4 Hz CTD scans)
     python tools/estimate_response_time.py P45_07 --col no3_stage1     another nitrate column
     python tools/estimate_response_time.py P45_07 --tau-max 120        a longer grid
+    python tools/estimate_response_time.py P45_07 --bottles            also: do lag-corrected profiles match the
+                                                                       bottles better than the down-cast?
 
 Why not the offset sweep (compare_match_estimators.py --sweep)? A lag both delays and smooths the profile. A
 depth shift can undo the delay but not the smoothing, so the sweep's tau saturates: on synthetic first-order lags
@@ -46,11 +48,18 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
+# these matrices are small (hundreds of columns): a multi-threaded BLAS spends more time coordinating threads than
+# computing, badly so on many-core Windows machines. One thread, unless the user has set otherwise. (Takes effect
+# only when this tool is the program; under pytest numpy is already loaded.)
+for _v in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("compare_match_estimators", _HERE / "compare_match_estimators.py")
@@ -80,15 +89,29 @@ def lag_design(t: np.ndarray, z: np.ndarray, grid: np.ndarray, tau: float) -> np
     A[rows, k + 1] += f
     if tau <= 0:
         return A
-    M = A.copy()                                           # x_i = M[i] @ N
+    M = A                                                  # x_i = M[i] @ N
     dt = np.diff(t)
     a = np.exp(-dt / tau)
     with np.errstate(divide="ignore", invalid="ignore"):
         r = np.where(dt > 0, tau / dt * (1 - a), 1.0)
-    w1, w0 = 1 - r, r - a                                  # weights on x_i and x_(i-1)
-    for i in range(1, n):
-        A[i] = a[i - 1] * A[i - 1] + w1[i - 1] * M[i] + w0[i - 1] * M[i - 1]
-    return A
+    w1, w0 = 1 - r, r - a                                  # weights on x_i and x_(i-1), both >= 0
+    U = np.empty_like(M)                                   # y_i = a_(i-1) y_(i-1) + U_i,  y_0 = x_0
+    U[0] = M[0]
+    U[1:] = w1[:, None] * M[1:] + w0[:, None] * M[:-1]
+    # the recursion solved in closed form, chunk by chunk: y_i = sum_j exp(-(t_i - t_j) / tau) U_j, a cumulative
+    # sum once each term is scaled by exp(+(t_j - t_s) / tau). Chunks span at most 30 tau so the scale stays below
+    # e^30; all terms are non-negative, so the sums lose no precision. (A row-by-row loop does the same, slowly.)
+    Y = np.empty_like(M)
+    carry, s0 = None, 0
+    while s0 < n:
+        e = int(min(max(np.searchsorted(t, t[s0] + 30.0 * tau, side="right"), s0 + 1), n))
+        E = np.exp(-(t[s0:e] - t[s0]) / tau)[:, None]
+        blk = U[s0:e].copy()
+        if carry is not None:
+            blk[0] += a[s0 - 1] * carry
+        Y[s0:e] = E * np.cumsum(blk / E, axis=0)
+        carry, s0 = Y[e - 1], e
+    return Y
 
 
 def fit_profile(t, z, y, grid, tau, smooth=SMOOTH):
@@ -100,10 +123,13 @@ def fit_profile(t, z, y, grid, tau, smooth=SMOOTH):
     i = np.arange(G - 2)
     D[i, i], D[i, i + 1], D[i, i + 2] = 1.0, -2.0, 1.0
     dz = float(np.median(np.diff(grid)))
-    lhs = np.vstack([A[ok], np.sqrt(smooth) * D / dz ** 2])
-    rhs = np.concatenate([y[ok], np.zeros(G - 2)])
-    N, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
-    res = y[ok] - A[ok] @ N
+    Ao = A[ok]
+    # normal equations (A'A + smooth D'D / dz^4) N = A'y; the penalty makes the matrix positive definite as long as
+    # two cells hold frames, and a tiny ridge guards the rest
+    H = Ao.T @ Ao + (smooth / dz ** 4) * (D.T @ D)
+    H[np.diag_indices(G)] += 1e-9 * max(float(np.trace(H)) / G, 1e-12)
+    N = np.linalg.solve(H, Ao.T @ y[ok])
+    res = y[ok] - Ao @ N
     return float(np.sum(res ** 2)), N, res
 
 
@@ -116,6 +142,8 @@ def refine_min(taus: np.ndarray, rss: np.ndarray):
     if j == 0:
         return float(taus[0]), False
     x, yv = taus[j - 1:j + 2], rss[j - 1:j + 2]
+    if np.isnan(yv).any():                        # a neighbour not evaluated (coarse-to-fine search)
+        return float(taus[j]), False
     den = (x[0] - x[1]) * (x[0] - x[2]) * (x[1] - x[2])
     A_ = (x[2] * (yv[1] - yv[0]) + x[1] * (yv[0] - yv[2]) + x[0] * (yv[2] - yv[1])) / den
     B_ = (x[2] ** 2 * (yv[0] - yv[1]) + x[1] ** 2 * (yv[2] - yv[0]) + x[0] ** 2 * (yv[1] - yv[2])) / den
@@ -143,7 +171,16 @@ def cast_tau(s: pd.DataFrame, taus: np.ndarray, dz: float, smooth: float = SMOOT
     if len(grid) < 4:
         out["skip"] = "profile shorter than four grid cells"
         return out
-    rss = np.array([fit_profile(t, z, y, grid, tau, smooth)[0] for tau in taus])
+    # coarse to fine: every 4th tau (and the last), then every tau within 4 steps of the coarse minimum. The RSS
+    # curve is smooth in tau, so this finds the grid minimum at about a third of the cost
+    rss = np.full(len(taus), np.nan)
+    coarse = sorted(set(range(0, len(taus), 4)) | {len(taus) - 1})
+    for j in coarse:
+        rss[j] = fit_profile(t, z, y, grid, taus[j], smooth)[0]
+    jc = int(np.nanargmin(rss))
+    for j in range(max(0, jc - 4), min(len(taus), jc + 5)):
+        if np.isnan(rss[j]):
+            rss[j] = fit_profile(t, z, y, grid, taus[j], smooth)[0]
     tau_hat, edge = refine_min(taus, rss)
     ok = np.isfinite(y)
     is_up, is_dn = s["up"].to_numpy(bool)[ok], s["down"].to_numpy(bool)[ok]
@@ -156,7 +193,92 @@ def cast_tau(s: pd.DataFrame, taus: np.ndarray, dz: float, smooth: float = SMOOT
     n = int(ok.sum())
     out.update(tau=np.nan if edge else tau_hat, tau_grid=tau_hat, edge=edge, rss0=r0[0], rss_min=r1[0],
                rms0=float(np.sqrt(r0[0] / n)), rms=float(np.sqrt(r1[0] / n)), hyst0=hyst(r0[2]), hyst=hyst(r1[2]),
-               curve=rss)
+               curve=rss, data=(t, z, y, grid))
+    return out
+
+
+# ------------------------------------------------------------------ against the bottles
+def _adopted(cruise):
+    """The cruise's stated SUNA calibration (suna_calibration.json), or None."""
+    try:
+        sys.path.insert(0, str(CME.REPO / "src"))
+        from suncat.suna_cal import load_suna_calibration
+        return load_suna_calibration(pp.cruise_dir(cruise))
+    except Exception:
+        return None
+
+
+def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
+    """Does correcting the lag make the sensor match the bottles better? Per bottle, on the same bottles:
+      down          the production estimator (step07's down-cast cell median, compare_match_estimators 'down')
+      N@0           the profile fitted with no lag (both legs averaged, in effect)
+      N@tau_cruise  the lag-corrected profile with the cruise's median tau (one constant for the sensor)
+      N@tau_cast    the lag-corrected profile with each cast's own tau
+    each read at the bottle depth, then sensor = offset + gain * bottle by OLS, LOOCV RMSE in bottle units, and
+    paired LOOCV squared errors against 'down' (exact sign test; Wilcoxon when scipy is present)."""
+    unit = "mg/m3" if var == "chl" else "umol/L"
+    bottles = CME.load_bottles(cruise, var)
+    tau_c = res["tau_median"]
+    per_cast = res["table"].set_index("cast")["tau"]
+    prof = {}
+    for cast, (t, z, y, grid) in data.items():
+        tc = per_cast.get(cast, np.nan)
+        prof[cast] = dict(grid=grid, n0=fit_profile(t, z, y, grid, 0.0, smooth)[1],
+                          nc=fit_profile(t, z, y, grid, tau_c, smooth)[1],
+                          nk=fit_profile(t, z, y, grid, tc, smooth)[1] if np.isfinite(tc) else None)
+    rows = []
+    for _, b in bottles.iterrows():
+        cast, zb = b["cast"], float(b["depth_m"])
+        rec = dict(cast=cast, depth_m=zb, bottle=float(b["bottle"]))
+        if cast in prof:
+            P = prof[cast]
+            inside = P["grid"][0] <= zb <= P["grid"][-1]
+            s = samples[cast]
+            rec["down"] = CME.cell_median(s[s["down"].astype(bool) & s["moving"].astype(bool)], zb)[0]
+            rec["N@0"] = float(np.interp(zb, P["grid"], P["n0"])) if inside else np.nan
+            rec["N@tau_cruise"] = float(np.interp(zb, P["grid"], P["nc"])) if inside else np.nan
+            rec["N@tau_cast"] = float(np.interp(zb, P["grid"], P["nk"])) if inside and P["nk"] is not None else np.nan
+        rows.append(rec)
+    T = pd.DataFrame(rows)
+    est = [e for e in ("down", "N@0", "N@tau_cruise", "N@tau_cast") if e in T and T[e].notna().sum() >= 5]
+    both = T.dropna(subset=est)
+    out = dict(table=T, fits={}, loocv_rmse={}, paired={})
+    say(f"\n  against the bottles: {len(T)} bottles, {len(both)} with every estimator; tau_cruise = {tau_c:.1f} s")
+    if len(both) < 5 or "down" not in est:
+        say("  too few bottles for a comparison")
+        return out
+    bb = both["bottle"].to_numpy(float)
+    say(f"  {'estimator':13s} {'gain (95% CI)':>27s} {'offset':>8s} {'R2':>6s}  LOOCV RMSE ({unit})")
+    loo = {}
+    for e in est:
+        f = CME.ols(bb, both[e].to_numpy(float))
+        loo[e] = CME.loo_errors(bb, both[e].to_numpy(float))
+        out["fits"][e], out["loocv_rmse"][e] = f, float(np.sqrt(np.nanmean(loo[e] ** 2)))
+        say(f"  {e:13s} {f['gain']:7.4f} ({f['lo']:.4f} to {f['hi']:.4f}) {f['offset']:+8.3f} {f['R2']:6.3f}  "
+            f"{out['loocv_rmse'][e]:.3f}")
+    try:
+        from scipy.stats import wilcoxon
+    except ImportError:
+        wilcoxon = None
+    say("  paired LOOCV squared errors vs down (negative = predicts the bottles better):")
+    for e in est:
+        if e == "down":
+            continue
+        d = loo[e] ** 2 - loo["down"] ** 2
+        p_s = CME.sign_test(d)
+        p_w = float(wilcoxon(d).pvalue) if (wilcoxon is not None and np.any(d != 0)) else float("nan")
+        out["paired"][e] = dict(median=float(np.nanmedian(d)), better=int((d < 0).sum()), n=len(d), p_sign=p_s,
+                                p_wilcoxon=p_w)
+        say(f"    {e:13s} median {np.nanmedian(d):+.3f}, better on {int((d < 0).sum())} of {len(d)}, sign test "
+            f"p = {p_s:.3f}" + (f", Wilcoxon p = {p_w:.3f}" if np.isfinite(p_w) else ""))
+    cal = _adopted(cruise) if var == "nitrate" else None
+    if cal and cal.get("mode") == "adopted":
+        f = out["fits"].get("N@tau_cruise")
+        say(f"  the cruise's adopted calibration: gain {cal['a1']:g}, offset {cal['a0']:+g} ({cal['source']})")
+        if f:
+            inside = f["lo"] <= cal["a1"] <= f["hi"]
+            say(f"    the lag-corrected fit's gain {f['gain']:.3f} (95% CI {f['lo']:.3f} to {f['hi']:.3f}) "
+                + ("includes" if inside else "excludes") + " it")
     return out
 
 
@@ -169,7 +291,7 @@ def read_cast(cruise: str, var: str, cast_file: Path, col: str | None):
 
 def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max: float | None = None,
              step: float | None = None, dz: float | None = None, smooth: float = SMOOTH, n_boot: int = 2000,
-             verbose: bool = True, write: bool = True) -> dict:
+             verbose: bool = True, write: bool = True, bottles: bool = False) -> dict:
     say = print if verbose else (lambda *a, **k: None)
     d = DEFAULTS[var]
     tau_max, step, dz = tau_max or d["tau_max"], step or d["step"], dz or d["dz"]
@@ -183,24 +305,25 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
     say(f"{cruise} {var}: first-order lag fitted to each cast's down and up profiles together (no bottles)")
     say(f"  tau grid 0 to {tau_max:g} s, step {step:g} s; profile grid {dz:g} m; curvature penalty {smooth:g}"
         + (f"; value column {col}" if col else ""))
-    rows, curves = [], []
-    for f in files:
-        cast = f.name.replace("_der.cnv", "").replace("_nitrate_QC.csv", "")
-        r = cast_tau(read_cast(cruise, var, f, col), taus, dz, smooth)
-        rows.append({k: v for k, v in dict(cast=cast, **r).items() if k != "curve"})
-        if r["curve"] is not None:
-            curves.append(pd.DataFrame({"cast": cast, "tau_s": taus, "rss": r["curve"]}))
-    t = pd.DataFrame(rows)
-    good = t[t["tau"].notna()]
+    rows, curves, data, samples = [], [], {}, {}
     say(f"\n  {'cast':16s} {'frames':>6s} {'down/up':>9s} {'tau (s)':>8s}   RMS misfit {unit}: tau=0 -> tau   "
         f"up-minus-down misfit: tau=0 -> tau")
-    for _, r in t.iterrows():
-        if "skip" in r and isinstance(r.get("skip"), str):
-            say(f"  {r['cast']:16s} skipped: {r['skip']}")
+    for f in files:                                       # each row printed as it is done
+        cast = f.name.replace("_der.cnv", "").replace("_nitrate_QC.csv", "")
+        samples[cast] = read_cast(cruise, var, f, col)
+        r = cast_tau(samples[cast], taus, dz, smooth)
+        rows.append({k: v for k, v in dict(cast=cast, **r).items() if k not in ("curve", "data")})
+        if r["curve"] is not None:
+            curves.append(pd.DataFrame({"cast": cast, "tau_s": taus, "rss": r["curve"]}))
+            data[cast] = r["data"]
+        if isinstance(r.get("skip"), str):
+            say(f"  {cast:16s} skipped: {r['skip']}", flush=True)
             continue
         tau_s = "  EDGE" if r["edge"] else f"{r['tau']:8.1f}"
-        say(f"  {r['cast']:16s} {r['n']:6d} {r['n_down']:4d}/{r['n_up']:<4d} {tau_s:>8s}   "
-            f"{r['rms0']:8.3f} -> {r['rms']:6.3f}            {r['hyst0']:+8.3f} -> {r['hyst']:+7.3f}")
+        say(f"  {cast:16s} {r['n']:6d} {r['n_down']:4d}/{r['n_up']:<4d} {tau_s:>8s}   "
+            f"{r['rms0']:8.3f} -> {r['rms']:6.3f}            {r['hyst0']:+8.3f} -> {r['hyst']:+7.3f}", flush=True)
+    t = pd.DataFrame(rows)
+    good = t[t["tau"].notna()]
     res = dict(table=t, taus=taus)
     n_edge = int(t["edge"].sum())
     if n_edge:
@@ -215,10 +338,18 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
     res.update(tau_median=float(np.median(v)), tau_iqr=(float(np.percentile(v, 25)), float(np.percentile(v, 75))),
                tau_ci90=(float(np.percentile(boot, 5)), float(np.percentile(boot, 95))), n_casts=len(v))
     if curves:
+        # pooled: RSS summed over casts. Each cast was searched coarse to fine around its OWN minimum, so first sum
+        # on the taus every cast has, then fill in, for every cast, the taus around the pooled minimum
         cv = pd.concat(curves)
         cv = cv[cv["cast"].isin(good["cast"])]
-        tot = cv.groupby("tau_s")["rss"].sum()
-        res["tau_pooled"], _ = refine_min(tot.index.to_numpy(float), tot.to_numpy(float))
+        W = cv.pivot(index="tau_s", columns="cast", values="rss").reindex(taus)
+        tot = W.sum(axis=1, min_count=W.shape[1])
+        jc = int(np.nanargmin(tot.to_numpy(float)))
+        for j in range(max(0, jc - 4), min(len(taus), jc + 5)):
+            for c in W.columns[W.iloc[j].isna()]:
+                W.iat[j, W.columns.get_loc(c)] = fit_profile(*data[c], taus[j], smooth)[0]
+        tot = W.sum(axis=1, min_count=W.shape[1])
+        res["tau_pooled"], _ = refine_min(taus, tot.to_numpy(float))
     share = 1 - good["rss_min"].sum() / good["rss0"].sum()
     res["rss_share_explained"] = float(share)
     say(f"\n  tau over {len(v)} casts: median {res['tau_median']:.1f} s (IQR {res['tau_iqr'][0]:.1f} to "
@@ -229,12 +360,17 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
     say(f"  the lag explains {share:.0%} of the misfit of a lag-free model (RSS, summed over these casts); "
         f"median up-minus-down misfit {good['hyst0'].median():+.3f} -> {good['hyst'].median():+.3f} {unit}")
     say("  tau is the e-folding time: the sensor covers 63% of a step change in tau seconds, 95% in 3 tau.")
+    if bottles:
+        res["bottles"] = bottle_check(cruise, var, res, samples, data, smooth, say)
     if write:
         out = pp.cruise_dir(cruise) / "_audit" / f"{cruise}__response_time_{var}.csv"
         out.parent.mkdir(parents=True, exist_ok=True)
         t.to_csv(out, index=False, encoding="utf-8-sig")
         if curves:
             pd.concat(curves).to_csv(out.with_name(out.stem + "_curve.csv"), index=False, encoding="utf-8-sig")
+        if bottles and "bottles" in res:
+            res["bottles"]["table"].to_csv(out.with_name(out.stem + "_bottles.csv"), index=False,
+                                           encoding="utf-8-sig")
         say(f"\n  per-cast table -> {out}")
         res["out"] = out
     return res
@@ -249,8 +385,10 @@ def main() -> int:
     ap.add_argument("--step", type=float, default=None, help="tau grid step, s (default 1 nitrate, 0.25 chl)")
     ap.add_argument("--dz", type=float, default=None, help="profile grid, m (default 1 nitrate, 0.5 chl)")
     ap.add_argument("--smooth", type=float, default=SMOOTH, help=f"curvature penalty (default {SMOOTH:g})")
+    ap.add_argument("--bottles", action="store_true",
+                    help="also test the lag-corrected profiles against the bottles (vs the down-cast estimator)")
     a = ap.parse_args()
-    estimate(a.cruise, a.var, a.col, a.tau_max, a.step, a.dz, a.smooth)
+    estimate(a.cruise, a.var, a.col, a.tau_max, a.step, a.dz, a.smooth, bottles=a.bottles)
     return 0
 
 

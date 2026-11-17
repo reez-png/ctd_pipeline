@@ -116,3 +116,20 @@ def test_design_matrix_matches_the_continuous_lag():
         y = ERT.lag_design(t, z, grid, tau) @ N
         ref = lagged(t, z, tau, lambda zz: np.interp(zz, grid, N), sub=50)
         assert np.max(np.abs(y - ref)) < 0.02, tau
+
+
+def test_lag_correction_matches_the_bottles_better_than_the_down_cast(tmp_path, monkeypatch):
+    # a 20 s lag: the down-cast reads water from above the bottle; the lag-corrected profile reads the bottle's own
+    # water, so it calibrates against the bottles with gain 1 and a smaller LOOCV error than down or N@0
+    C = _lagged_cruise(tmp_path, 20.0, noise=0.3)
+    rows = [(f"{CRUISE}_CTD_{n:03d}", z) for n in (2, 3, 4) for z in range(20, 61, 4)]
+    zb = np.array([r[1] for r in rows], float)
+    pd.DataFrame({"cast_id": [r[0] for r in rows], "depth_m": zb, "bottle_no3": GEN.no3_true(zb)}
+                 ).to_csv(C / "_audit" / "step03_bottle_matchups.csv", index=False)
+    monkeypatch.setenv("CTD_PIPELINE_ROOT", str(tmp_path))
+    r = ERT.estimate(CRUISE, "nitrate", verbose=False, write=False, bottles=True)["bottles"]
+    L = r["loocv_rmse"]
+    assert L["N@tau_cruise"] < 0.5 * L["down"] and L["N@tau_cruise"] < 0.5 * L["N@0"], L
+    f = r["fits"]["N@tau_cruise"]
+    assert f["lo"] <= 1.0 <= f["hi"] or abs(f["gain"] - 1) < 0.03, f
+    assert r["paired"]["N@tau_cruise"]["better"] >= 0.75 * r["paired"]["N@tau_cruise"]["n"]
