@@ -88,7 +88,7 @@ DEFAULTS = {"nitrate": dict(tau_max=90.0, step=1.0, dz=1.0), "chl": dict(tau_max
 
 # ------------------------------------------------------------------ the model (suncat.nitrate.hysteresis)
 def cast_tau(s: pd.DataFrame, taus: np.ndarray, dz: float, smooth: float = SMOOTH, delay: float = 0.0,
-             delays=None) -> dict:
+             delays=None, mode: str = "time") -> dict:
     """tau for one cast's samples (t, z, v, down, up as compare_match_estimators reads them), with a fixed pure
     delay (default none) or, given a grid of `delays`, the delay and tau fitted together. Residuals only on the
     legs (down: Loop Edit kept; up): surface soak and flagged scans carry the sensor's state forward in time but
@@ -97,8 +97,8 @@ def cast_tau(s: pd.DataFrame, taus: np.ndarray, dz: float, smooth: float = SMOOT
     a = (elapsed_seconds(s["t"]), s["z"].to_numpy(float), s["v"].to_numpy(float),
          s["down"].to_numpy(bool), s["up"].to_numpy(bool))
     if delays is not None:
-        return H.cast_delay_tau(*a, delays=delays, taus=taus, dz=dz, smooth=smooth)
-    return H.cast_tau(*a, taus, dz, smooth, delay=delay)
+        return H.cast_delay_tau(*a, delays=delays, taus=taus, dz=dz, smooth=smooth, mode=mode)
+    return H.cast_tau(*a, taus, dz, smooth, delay=delay, mode=mode)
 
 
 # ------------------------------------------------------------------ against the bottles
@@ -131,9 +131,10 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
     prof = {}
     for cast, (t, zd, y, grid, z_raw) in data.items():
         tc = per_cast.get(cast, np.nan)
+        md = res.get("mode", "time")
         prof[cast] = dict(grid=grid, n0=fit_profile(t, z_raw, y, grid, 0.0, smooth)[1],
-                          nc=fit_profile(t, z_raw, y, grid, tau_c, smooth, d_c)[1],
-                          nk=fit_profile(t, zd, y, grid, tc, smooth)[1] if np.isfinite(tc) else None)
+                          nc=fit_profile(t, z_raw, y, grid, tau_c, smooth, d_c, md)[1],
+                          nk=fit_profile(t, zd, y, grid, tc, smooth, mode=md)[1] if np.isfinite(tc) else None)
     rows = []
     for _, b in bottles.iterrows():
         cast, zb = b["cast"], float(b["depth_m"])
@@ -151,7 +152,8 @@ def bottle_check(cruise, var, res, samples, data, smooth=SMOOTH, say=print):
     est = [e for e in ("down", "N@0", "N@tau_cruise", "N@tau_cast") if e in T and T[e].notna().sum() >= 5]
     both = T.dropna(subset=est)
     out = dict(table=T, fits={}, loocv_rmse={}, paired={})
-    say(f"\n  against the bottles: {len(T)} bottles, {len(both)} with every estimator; tau_cruise = {tau_c:.1f} s"
+    say(f"\n  against the bottles: {len(T)} bottles, {len(both)} with every estimator; tau_cruise = {tau_c:.1f} "
+        f"{'m (flushing length)' if res.get('mode') == 'distance' else 's'}"
         + (f", delay {d_c:+.1f} s" if d_c else "") + " (N@0: no delay, no lag)")
     if len(both) < 5 or "down" not in est:
         say("  too few bottles for a comparison")
@@ -264,9 +266,12 @@ def read_cast(cruise: str, var: str, cast_file: Path, col: str | None):
 def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max: float | None = None,
              step: float | None = None, dz: float | None = None, smooth: float = SMOOTH, n_boot: int = 2000,
              verbose: bool = True, write: bool = True, bottles: bool = False, delay: float = 0.0,
-             fit_delay: bool = False, delay_min: float = -10.0, delay_max: float = 40.0) -> dict:
+             fit_delay: bool = False, delay_min: float = -10.0, delay_max: float = 40.0, mode: str = "time") -> dict:
     say = print if verbose else (lambda *a, **k: None)
-    d = DEFAULTS[var]
+    d = dict(DEFAULTS[var])
+    if mode == "distance":                                 # tau is a flushing length in metres
+        d.update(tau_max=40.0, step=0.5)
+    tu = "m" if mode == "distance" else "s"
     tau_max, step, dz = tau_max or d["tau_max"], step or d["step"], dz or d["dz"]
     taus = np.arange(0.0, tau_max + step / 2, step)
     folder, pattern = (pp.product_dir(cruise, "ctd_derived"), "*_der.cnv") if var == "chl" else \
@@ -276,9 +281,12 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
         raise FileNotFoundError(f"no {pattern} in {folder}")
     unit = "mg/m3" if var == "chl" else "umol/L"
     say(f"{cruise} {var}: first-order lag fitted to each cast's down and up profiles together (no bottles)")
-    say(f"  tau grid 0 to {tau_max:g} s, step {step:g} s; profile grid {dz:g} m; curvature penalty {smooth:g}"
+    say(f"  tau grid 0 to {tau_max:g} {tu}, step {step:g} {tu}; profile grid {dz:g} m; curvature penalty {smooth:g}"
         + (f"; value column {col}" if col else ""))
-    delays = np.arange(delay_min, delay_max + step / 2, step) if fit_delay else None
+    if mode == "distance":
+        say("  RESPONSE PER METRE TRAVELLED: tau is a flushing length L (m); the sensor relaxes as the package moves "
+            "and is frozen while it stops (effective time constant L / |w|)")
+    delays = np.arange(delay_min, delay_max + 1.0 / 2, 1.0) if fit_delay else None
     if fit_delay:
         say(f"  DELAY AND RESPONSE fitted together: delay grid {delay_min:+g} to {delay_max:+g} s (a pure delay shifts "
             "the record; a response also smooths it)")
@@ -286,12 +294,12 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
         say(f"  FIXED DELAY {delay:+g} s applied first (frames carry the water from {delay:g} s earlier), then tau fitted")
     rows, curves, data, samples, full = [], [], {}, {}, {}
     dcol = f" {'delay':>6s}" if fit_delay else ""
-    say(f"\n  {'cast':16s} {'frames':>6s} {'down/up':>9s}{dcol} {'tau (s)':>8s}   RMS misfit {unit}: none -> fitted   "
+    say(f"\n  {'cast':16s} {'frames':>6s} {'down/up':>9s}{dcol} {'tau (' + tu + ')':>8s}   RMS misfit {unit}: none -> fitted   "
         f"up-minus-down misfit: none -> fitted" + ("   [tau with no delay]" if fit_delay else ""))
     for f in files:                                       # each row printed as it is done
         cast = f.name.replace("_der.cnv", "").replace("_nitrate_QC.csv", "")
         samples[cast] = read_cast(cruise, var, f, col)
-        r = cast_tau(samples[cast], taus, dz, smooth, delay=delay, delays=delays)
+        r = cast_tau(samples[cast], taus, dz, smooth, delay=delay, delays=delays, mode=mode)
         rows.append({k: v for k, v in dict(cast=cast, **r).items()
                      if k not in ("curve", "data", "z_raw", "curve_delay")})
         if r["curve"] is not None:
@@ -308,10 +316,10 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
             + (f"   [{r['tau_only']:.1f}]" if fit_delay else ""), flush=True)
     t = pd.DataFrame(rows)
     good = t[t["tau"].notna()]
-    res = dict(table=t, taus=taus)
+    res = dict(table=t, taus=taus, mode=mode, unit_tau=tu, samples=samples, data=data, full=full)
     n_edge = int(t["edge"].sum())
     if n_edge:
-        say(f"\n  {n_edge} cast(s) at the end of the grid (EDGE): no minimum below {tau_max:g} s; left out. "
+        say(f"\n  {n_edge} cast(s) at the end of the grid (EDGE): no minimum below {tau_max:g} {tu}; left out. "
             "If many, widen --tau-max.")
     if len(good) < 3:
         say("  fewer than 3 casts with an estimate: no cruise value")
@@ -322,14 +330,14 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
     if delay and not fit_delay:
         res["delay_fixed"] = float(delay)
     share = res["rss_share_explained"]
-    say(f"\n  tau over {res['n_casts']} casts: median {res['tau_median']:.1f} s (IQR {res['tau_iqr'][0]:.1f} to "
-        f"{res['tau_iqr'][1]:.1f} s); bootstrap over casts, 90% interval {res['tau_ci90'][0]:.1f} to "
-        f"{res['tau_ci90'][1]:.1f} s")
+    say(f"\n  tau over {res['n_casts']} casts: median {res['tau_median']:.1f} {tu} (IQR {res['tau_iqr'][0]:.1f} to "
+        f"{res['tau_iqr'][1]:.1f} {tu}); bootstrap over casts, 90% interval {res['tau_ci90'][0]:.1f} to "
+        f"{res['tau_ci90'][1]:.1f} {tu}")
     if "tau_pooled" in res:
-        say(f"  pooled (RSS summed over casts): {res['tau_pooled']:.1f} s")
+        say(f"  pooled (RSS summed over casts): {res['tau_pooled']:.1f} {tu}")
     if "delay_fixed" in res:
-        say(f"  delay fixed at {res['delay_fixed']:+.1f} s (given, not estimated); delay + tau: median "
-            f"{res['delay_fixed'] + res['tau_median']:.1f} s")
+        say(f"  delay fixed at {res['delay_fixed']:+.1f} s (given, not estimated)"
+            + (f"; delay + tau: median {res['delay_fixed'] + res['tau_median']:.1f} s" if mode == "time" else ""))
     elif "delay_median" in res:
         say(f"  delay over these casts: median {res['delay_median']:+.1f} s (IQR {res['delay_iqr'][0]:+.1f} to "
             f"{res['delay_iqr'][1]:+.1f} s); bootstrap over casts, 90% interval {res['delay_ci90'][0]:+.1f} to "
@@ -341,7 +349,8 @@ def estimate(cruise: str, var: str = "nitrate", col: str | None = None, tau_max:
     say(f"  the {'delay and lag explain' if (fit_delay or delay) else 'lag explains'} {share:.0%} of the misfit of a "
         f"model with neither (RSS, summed over these casts); "
         f"median up-minus-down misfit {good['hyst0'].median():+.3f} -> {good['hyst'].median():+.3f} {unit}")
-    say("  tau is the e-folding time: the sensor covers 63% of a step change in tau seconds, 95% in 3 tau.")
+    say("  tau is the e-folding " + ("distance: the sensor covers 63% of a step change in tau metres of travel, 95% in 3 tau."
+        if mode == "distance" else "time: the sensor covers 63% of a step change in tau seconds, 95% in 3 tau."))
     if bottles:
         res["bottles"] = bottle_check(cruise, var, res, samples, data, smooth, say)
     if write:
@@ -370,13 +379,15 @@ def main() -> int:
     ap.add_argument("--delay", type=float, default=0.0,
                     help="fixed pure delay, s, applied before tau is fitted (e.g. the water-entry clock from step04)")
     ap.add_argument("--fit-delay", action="store_true", help="fit a pure delay and tau together")
+    ap.add_argument("--response", choices=["time", "distance"], default="time",
+                    help="relax per second (time constant, s) or per metre travelled (flushing length, m)")
     ap.add_argument("--delay-range", type=float, nargs=2, default=(-10.0, 40.0), metavar=("MIN", "MAX"),
                     help="delay grid for --fit-delay, s (default -10 40)")
     ap.add_argument("--bottles", action="store_true",
                     help="also test the lag-corrected profiles against the bottles (vs the down-cast estimator)")
     a = ap.parse_args()
     estimate(a.cruise, a.var, a.col, a.tau_max, a.step, a.dz, a.smooth, bottles=a.bottles, delay=a.delay,
-             fit_delay=a.fit_delay, delay_min=a.delay_range[0], delay_max=a.delay_range[1])
+             fit_delay=a.fit_delay, delay_min=a.delay_range[0], delay_max=a.delay_range[1], mode=a.response)
     return 0
 
 
