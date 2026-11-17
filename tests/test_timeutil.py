@@ -45,3 +45,25 @@ def test_unreadable_values_become_nan():
     e = epoch_seconds(["2026-08-04 11:27:56", "not a time", None])
     assert np.isfinite(e[0]) and np.isnan(e[1:]).all()
     assert to_utc(["x"]).isna().all()
+
+
+def test_non_iso_text_is_read_by_the_second_pass():
+    t = to_utc(["2026-08-04 11:27:56", "08/04/2026 11:27:57", "Aug 04 2026 11:27:59"])
+    assert t.notna().all()
+    assert np.allclose(elapsed_seconds(t), [0.0, 1.0, 3.0])
+
+
+def test_unreadable_times_are_counted_not_dropped_silently(capsys):
+    to_utc(["2026-08-04 11:27:56", "garbage", "", None], what="merged 1 s")
+    out = capsys.readouterr().out
+    assert "1 of 4 merged 1 s times unreadable" in out and "'garbage'" in out
+    to_utc(["2026-08-04 11:27:56"], what="clean")
+    assert capsys.readouterr().out == ""
+
+
+def test_the_old_guess_loses_rows_that_iso8601_keeps():
+    # pandas guesses the format from the first value; coerce then turns the other form into NaT
+    col = pd.Series(["2026-08-04 11:27:56+00:00", "2026-08-04 11:27:56.500000+00:00", "2026-08-04 11:27:57+00:00"])
+    old = pd.to_datetime(col, utc=True, errors="coerce")
+    assert old.isna().sum() == 1
+    assert to_utc(col).notna().all()
