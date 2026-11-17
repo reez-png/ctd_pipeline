@@ -190,3 +190,17 @@ def test_grid_cruise_writes_one_table_per_cast(tmp_path, ctd):
     assert list(t.columns[:3]) == ["cruise_id", "cast_id", "pressure_db"]
     assert t.set_index("pressure_db").loc[9.0, "nitrate_uM"] == 4.0
     assert stats.loc[0, "cast_id"] == "C1" and stats.loc[0, "nitrate_used"] == 1
+
+
+def test_slow_response_travels_with_the_nitrate(ctd):
+    df, meta = ctd
+    f = frames([(8.0, "down", True, 1.0, True), (9.0, "down", True, 2.0, True)])
+    out, st = g.grid_cast("C1", df, meta, f, response=(44.4, True))
+    r = out.set_index("pressure_db")
+    assert r.loc[8.0, "nitrate_slow_response"] == True and pd.isna(r.loc[10.0, "nitrate_slow_response"])  # noqa: E712
+    assert (out["suna_tau_s"] == 44.4).all() and any("SLOW" in n for n in st.notes)
+    out, _ = g.grid_cast("C1", df, meta, f, response=(6.2, False))
+    assert out.set_index("pressure_db").loc[8.0, "nitrate_slow_response"] == False  # noqa: E712
+    # no response file for the cruise: not assessed, so empty, not False
+    out, _ = g.grid_cast("C1", df, meta, f)
+    assert out["nitrate_slow_response"].isna().all() and out["suna_tau_s"].isna().all()
