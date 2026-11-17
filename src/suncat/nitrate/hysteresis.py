@@ -14,8 +14,14 @@ Cruise value: median over casts (frames are serially correlated, so each cast is
 the interquartile range, a bootstrap over casts (90% interval), and a pooled estimate (RSS summed over casts).
 Known bias: water displaced by d metres between the legs biases tau by about d / (v_down + v_up).
 
+A pure delay (clock offset, transport through tubing) is a second, separate effect: the sensor at time t sees the
+water from z(t - delay). The first-order model alone absorbs it into tau. cast_tau(delay=...) applies a known
+delay first; cast_delay_tau fits both (the delay shifts, the response also smooths). Their split is resolved when
+the response is long or the noise low; otherwise delay + tau is still well determined but the split is not, and
+needs an independent delay (e.g. the water entry and exit times in step04).
+
 The first-order response is the model commonly used for sensor response-time correction (for oxygen optodes,
-e.g. Bittig et al., 2014, Front. Mar. Sci.). The difference here is that it is run FORWARD (profile -> reading)
+e.g. Bittig et al., 2014, Limnol. Oceanogr.: Methods 12, 617-636). The difference here is that it is run FORWARD (profile -> reading)
 and fitted, not inverted: inverting it (y + tau dy/dt) amplifies frame noise by about tau/dt, which at tau = 30 s
 and 1 s frames swamps the signal.
 """
@@ -68,9 +74,18 @@ def lag_design(t: np.ndarray, z: np.ndarray, grid: np.ndarray, tau: float) -> np
     return Y
 
 
-def fit_profile(t, z, y, grid, tau, smooth=SMOOTH):
-    """Least-squares profile N for one tau; returns (rss, N, residuals at the frames with a value)."""
-    A = lag_design(t, z, grid, tau)
+def delayed_path(t, z, delay: float) -> np.ndarray:
+    """Depth of the water a frame stamped at t actually carries when the record is delayed by `delay` s (clock
+    offset or transport through tubing): z(t - delay), interpolated along the path, held at its first value before
+    the record starts. delay > 0: the sensor stamps its water LATER than the CTD does."""
+    t, z = np.asarray(t, float), np.asarray(z, float)
+    return z if delay == 0 else np.interp(t - delay, t, z)
+
+
+def fit_profile(t, z, y, grid, tau, smooth=SMOOTH, delay: float = 0.0):
+    """Least-squares profile N for one tau (and a pure delay, default none); returns (rss, N, residuals at the
+    frames with a value)."""
+    A = lag_design(t, delayed_path(t, z, delay), grid, tau)
     ok = np.isfinite(y)
     G = len(grid)
     D = np.zeros((G - 2, G))
@@ -106,27 +121,24 @@ def refine_min(taus: np.ndarray, rss: np.ndarray):
     return float(np.clip(-B_ / (2 * A_), x[0], x[2])), False
 
 
-def search_tau(t, z, y, grid, taus, smooth=SMOOTH):
+def search_tau(t, z, y, grid, taus, smooth=SMOOTH, delay: float = 0.0):
     """RSS over the tau grid, coarse to fine (every 4th tau and the last, then every tau within 4 steps of the
     coarse minimum; the RSS curve is smooth in tau). Returns (rss with NaN where not evaluated, tau_hat, edge)."""
     taus = np.asarray(taus, float)
     rss = np.full(len(taus), np.nan)
     for j in sorted(set(range(0, len(taus), 4)) | {len(taus) - 1}):
-        rss[j] = fit_profile(t, z, y, grid, taus[j], smooth)[0]
+        rss[j] = fit_profile(t, z, y, grid, taus[j], smooth, delay)[0]
     jc = int(np.nanargmin(rss))
     for j in range(max(0, jc - 4), min(len(taus), jc + 5)):
         if np.isnan(rss[j]):
-            rss[j] = fit_profile(t, z, y, grid, taus[j], smooth)[0]
+            rss[j] = fit_profile(t, z, y, grid, taus[j], smooth, delay)[0]
     tau_hat, edge = refine_min(taus, rss)
     return rss, tau_hat, edge
 
 
-def cast_tau(t, z, y, is_down, is_up, taus, dz, smooth=SMOOTH, min_frames=MIN_FRAMES) -> dict:
-    """tau for one cast. t: seconds (any origin), z: depth or pressure, y: sensor values with NaN where a frame is
-    not to be fitted (not clean, not on a leg); every frame with t and z carries the sensor state forward.
-    is_down / is_up: leg masks. Returns n, n_down, n_up, tau (NaN at the grid's upper edge), tau_grid, edge,
-    rss0 / rss_min and rms0 / rms (lag-free and fitted), hyst0 / hyst (mean misfit up minus down, lag-free and
-    fitted), curve (RSS over taus), data (t, z, y, grid) for refits, or skip (a reason) when it cannot."""
+def _prep(t, z, y, is_down, is_up, dz, min_frames):
+    """Sort by time, drop frames without t or z, keep values on the legs only, build the depth grid. Returns
+    (t, z, y, is_down, is_up, grid, out) where out holds the counts and, when the cast cannot be fitted, `skip`."""
     t, z, y = (np.asarray(a, float) for a in (t, z, y))
     is_down, is_up = np.asarray(is_down, bool), np.asarray(is_up, bool)
     keep = np.isfinite(t) & np.isfinite(z)
@@ -137,26 +149,84 @@ def cast_tau(t, z, y, is_down, is_up, taus, dz, smooth=SMOOTH, min_frames=MIN_FR
     out = dict(n=int(ok.sum()), n_down=int((ok & is_down).sum()), n_up=int((ok & is_up).sum()), tau=np.nan,
                edge=False, rss0=np.nan, rss_min=np.nan, rms0=np.nan, rms=np.nan, hyst0=np.nan, hyst=np.nan,
                curve=None)
+    grid = None
     if min(out["n_down"], out["n_up"]) < min_frames:
         out["skip"] = f"too few frames with a value on a leg (down {out['n_down']}, up {out['n_up']})"
-        return out
-    t = t - t[0]
-    grid = np.arange(np.floor(z.min() / dz) * dz, np.ceil(z.max() / dz) * dz + dz / 2, dz)
-    if len(grid) < 4:
-        out["skip"] = "profile shorter than four grid cells"
-        return out
-    rss, tau_hat, edge = search_tau(t, z, y, grid, taus, smooth)
+    else:
+        t = t - t[0]
+        grid = np.arange(np.floor(z.min() / dz) * dz, np.ceil(z.max() / dz) * dz + dz / 2, dz)
+        if len(grid) < 4:
+            out["skip"] = "profile shorter than four grid cells"
+    return t, z, y, is_down, is_up, grid, out
+
+
+def _finish(out, t, z, y, is_down, is_up, grid, rss, tau_hat, edge, smooth, delay):
+    """Fill in the fitted and lag-free misfits. rss0 is the model with NO delay and NO lag (both legs see the
+    same profile at their stamped depths), so 1 - rss_min/rss0 is the share of the mismatch the delay and the
+    lag explain together."""
+    ok = np.isfinite(y)
     up, dn = is_up[ok], is_down[ok]
 
     def hyst(res):                                # mean misfit up minus down: the hysteresis left unexplained
         return float(np.mean(res[up]) - np.mean(res[dn])) if up.any() and dn.any() else np.nan
 
+    zd = delayed_path(t, z, delay)
     r0 = fit_profile(t, z, y, grid, 0.0, smooth)
-    r1 = fit_profile(t, z, y, grid, tau_hat, smooth)
+    r1 = fit_profile(t, zd, y, grid, tau_hat, smooth)
     n = int(ok.sum())
     out.update(tau=np.nan if edge else tau_hat, tau_grid=tau_hat, edge=edge, rss0=r0[0], rss_min=r1[0],
                rms0=float(np.sqrt(r0[0] / n)), rms=float(np.sqrt(r1[0] / n)), hyst0=hyst(r0[2]), hyst=hyst(r1[2]),
-               curve=rss, data=(t, z, y, grid))
+               curve=rss, data=(t, zd, y, grid), z_raw=z, delay=float(delay))
+    return out
+
+
+def cast_tau(t, z, y, is_down, is_up, taus, dz, smooth=SMOOTH, min_frames=MIN_FRAMES, delay: float = 0.0) -> dict:
+    """tau for one cast, with a known pure delay (default none). t: seconds (any origin), z: depth or pressure, y:
+    sensor values with NaN where a frame is not to be fitted (not clean, not on a leg); every frame with t and z
+    carries the sensor state forward. is_down / is_up: leg masks. Returns n, n_down, n_up, tau (NaN at the grid's
+    upper edge), tau_grid, edge, rss0 / rss_min and rms0 / rms (no delay and no lag, and fitted), hyst0 / hyst
+    (mean misfit up minus down, the same two), curve (RSS over taus), delay, data (t, delayed z, y, grid) for
+    refits, or skip (a reason) when it cannot."""
+    t, z, y, is_down, is_up, grid, out = _prep(t, z, y, is_down, is_up, dz, min_frames)
+    if "skip" in out:
+        return out
+    rss, tau_hat, edge = search_tau(t, z, y, grid, taus, smooth, delay)
+    return _finish(out, t, z, y, is_down, is_up, grid, rss, tau_hat, edge, smooth, delay)
+
+
+def cast_delay_tau(t, z, y, is_down, is_up, delays, taus, dz, smooth=SMOOTH, min_frames=MIN_FRAMES) -> dict:
+    """A pure delay AND a first-order response for one cast, fitted together.
+
+    Model: the sensor at time t sees the water that was at depth z(t - delay), through a first-order response
+    with time constant tau. A delay shifts the record without smoothing it; a response smooths it as well. Both
+    move the down-cast and up-cast apart, but only the response blurs the nitracline, so with enough structure in
+    the profile the two separate. For each delay on the grid tau is found as in cast_tau; the profile of the
+    misfit over delays, min over tau of RSS(delay, tau), gives the delay (coarse to fine, parabolic refinement)
+    and tau is refitted at it. Returns cast_tau's keys (at the fitted delay) plus delay_edge, curve_delay (the
+    misfit profile over `delays`) and tau_only (tau with the delay fixed at 0, for comparison)."""
+    t, z, y, is_down, is_up, grid, out = _prep(t, z, y, is_down, is_up, dz, min_frames)
+    if "skip" in out:
+        return out
+    delays = np.asarray(delays, float)
+    prof = np.full(len(delays), np.nan)
+
+    def at(j):
+        if np.isnan(prof[j]):
+            prof[j] = np.nanmin(search_tau(t, z, y, grid, taus, smooth, delays[j])[0])
+
+    for j in sorted(set(range(0, len(delays), 4)) | {len(delays) - 1}):
+        at(j)
+    jc = int(np.nanargmin(prof))
+    for j in range(max(0, jc - 4), min(len(delays), jc + 5)):
+        at(j)
+    d_hat, d_edge = refine_min(delays, prof)
+    if int(np.nanargmin(prof)) == 0 and delays[0] < 0:
+        d_edge = True                                 # a minimum at a negative lower bound is a limit too
+    rss, tau_hat, edge = search_tau(t, z, y, grid, taus, smooth, d_hat)
+    rss0_tau, tau0, _ = search_tau(t, z, y, grid, taus, smooth, 0.0)
+    out = _finish(out, t, z, y, is_down, is_up, grid, rss, tau_hat, edge, smooth, d_hat)
+    out.update(delay=np.nan if d_edge else float(d_hat), delay_grid=float(d_hat), delay_edge=bool(d_edge),
+               curve_delay=prof, tau_only=float(tau0), rss_tau_only=float(np.nanmin(rss0_tau)))
     return out
 
 
@@ -179,7 +249,17 @@ def summarise(per_cast: dict, taus, smooth=SMOOTH, n_boot: int = 2000, seed: int
             if np.isnan(W[i, j]):
                 W[i, j] = fit_profile(*r["data"], taus[j], smooth)[0]
     pooled, _ = refine_min(taus, W.sum(axis=0))
-    return dict(tau_median=float(np.median(v)), tau_iqr=(float(np.percentile(v, 25)), float(np.percentile(v, 75))),
+    extra = {}
+    dl = np.array([r.get("delay", np.nan) for r in good.values()], float)
+    if np.isfinite(dl).sum() >= 3 and np.nanmax(np.abs(dl)) > 0:
+        dl = dl[np.isfinite(dl)]
+        bd = np.median(rng.choice(dl, (n_boot, len(dl)), replace=True), axis=1)
+        sm = np.array([r["tau"] + r.get("delay", 0.0) for r in good.values()], float)
+        extra = dict(delay_median=float(np.median(dl)),
+                     delay_iqr=(float(np.percentile(dl, 25)), float(np.percentile(dl, 75))),
+                     delay_ci90=(float(np.percentile(bd, 5)), float(np.percentile(bd, 95))),
+                     sum_median=float(np.median(sm)), n_tau_zero=int(np.sum(v <= 0.5)))
+    return dict(**extra, tau_median=float(np.median(v)), tau_iqr=(float(np.percentile(v, 25)), float(np.percentile(v, 75))),
                 tau_ci90=(float(np.percentile(boot, 5)), float(np.percentile(boot, 95))), n_casts=len(v),
                 tau_pooled=float(pooled),
                 rss_share_explained=float(1 - sum(r["rss_min"] for r in good.values())

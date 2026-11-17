@@ -39,7 +39,7 @@ def lagged(t, z, tau, f, sub=20):
     return np.interp(t, tf, y)
 
 
-def _lagged_cruise(root, tau, noise=0.5, shift_up=0.0, seed=1):
+def _lagged_cruise(root, tau, noise=0.5, shift_up=0.0, seed=1, delay=0.0):
     C = GEN.make_cruise(root, CRUISE)
     rng = np.random.default_rng(seed)
     for f in sorted((C / "L2/nitrate").glob("*_nitrate_QC.csv")):
@@ -47,6 +47,7 @@ def _lagged_cruise(root, tau, noise=0.5, shift_up=0.0, seed=1):
         tt = pd.to_datetime(d["utc_time"], format="ISO8601")
         t = (tt - tt.iloc[0]).dt.total_seconds().to_numpy(float)
         z = d["depth_m"].to_numpy(float) + np.where(d["leg"].astype(str).eq("up"), shift_up, 0.0)
+        z = np.interp(t - delay, t, z)                     # a pure delay: the frame at t carries water from t - delay
         d["no3_qc"] = lagged(t, z, tau, GEN.no3_true) + rng.normal(0, noise, len(d))
         d["L1_clean"] = True
         d.to_csv(f, index=False)
@@ -148,3 +149,40 @@ def test_offset_sweep_finds_a_bottle_depth_offset(tmp_path, monkeypatch):
     assert abs(o["best_D"] + 2.0) <= 0.5, o["best_D"]
     assert o["ci90"][0] - 0.5 <= -2.0 <= o["ci90"][1] + 0.5
     assert o["q2_best"] > o["q2_at_0"] and o["determined"]
+
+
+def test_a_known_delay_given_first_leaves_the_response_time(tmp_path, monkeypatch):
+    # a 16 s pure delay (a clock offset or tubing) and an 8 s response: with the delay given, tau is the 8 s
+    _lagged_cruise(tmp_path, 8.0, delay=16.0)
+    monkeypatch.setenv("CTD_PIPELINE_ROOT", str(tmp_path))
+    r = ERT.estimate(CRUISE, "nitrate", verbose=False, write=False, delay=16.0)
+    assert abs(r["tau_median"] - 8.0) <= 1.0, r["table"]["tau"].tolist()
+    # without it, the first-order model absorbs the delay into tau
+    r0 = ERT.estimate(CRUISE, "nitrate", verbose=False, write=False)
+    assert r0["tau_median"] > 18.0
+
+
+@pytest.mark.parametrize("d, tau", [(16.0, 8.0), (16.0, 0.0), (0.0, 20.0)])
+def test_delay_and_response_fitted_together(tmp_path, monkeypatch, d, tau):
+    # low noise (0.2 umol/L): the delay shifts the record, the response also smooths it, and the two separate
+    _lagged_cruise(tmp_path, tau, noise=0.2, delay=d)
+    monkeypatch.setenv("CTD_PIPELINE_ROOT", str(tmp_path))
+    r = ERT.estimate(CRUISE, "nitrate", verbose=False, write=False, fit_delay=True)
+    assert abs(r["delay_median"] - d) <= 1.5 and abs(r["tau_median"] - tau) <= 1.5, (r["delay_median"], r["tau_median"])
+
+
+def test_when_the_split_is_not_resolved_the_sum_still_is():
+    # documented limit (suncat.nitrate.hysteresis): a short response next to a long delay, at noise 0.5, can be
+    # fitted as tau = 0 and a longer delay; delay + tau stays close to the truth (24 s here)
+    from suncat.nitrate import hysteresis as H
+    import test_hysteresis as TH                                          # its synthetic cast (tanh nitracline)
+    res = []
+    for k in range(4):
+        t, z, y0, dn, up = TH._cast(0.0, k, noise=0.0)
+        zz = np.interp(t - 16.0, t, z)
+        x = lagged(t, zz, 8.0, lambda q: 5 + 8 * (1 + np.tanh((q - 30) / 6)))
+        y = x + np.random.default_rng(k).normal(0, 0.5, len(t))
+        r = H.cast_delay_tau(t, z, y, dn, up, delays=np.arange(-10, 41, 1.0), taus=np.arange(0, 61, 1.0), dz=1.0)
+        res.append((r["delay"], r["tau"]))
+    sums = [a + b for a, b in res]
+    assert all(17.0 <= s_ <= 26.0 for s_ in sums), res
