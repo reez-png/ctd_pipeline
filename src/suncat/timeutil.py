@@ -15,15 +15,28 @@ import pandas as pd
 _EPOCH = pd.Timestamp("1970-01-01", tz="UTC")
 
 
-def to_utc(values, fmt: str | None = "ISO8601") -> pd.Series:
-    """Times as a tz-aware UTC Series. Text is parsed with format="ISO8601" by default, which reads mixed
-    forms (with and without fractional seconds, with or without an offset) in one column; without a format,
-    pandas guesses one from the first value and turns every value written the other way into NaT. Tz-naive
-    times are taken as UTC. Unreadable values become NaT."""
+def to_utc(values, fmt: str | None = "ISO8601", what: str | None = None) -> pd.Series:
+    """Times as a tz-aware UTC Series. Tz-naive times are taken as UTC.
+
+    Text is parsed with format="ISO8601" first, which reads mixed ISO forms in one column (with and without
+    fractional seconds, with or without an offset). Without a format, pandas guesses one from the FIRST value and
+    then either raises on, or (errors="coerce") silently turns into NaT, every value written the other way: a file
+    whose times are "11:27:56+00:00" on some rows and "11:27:56.500000+00:00" on others loses rows. Values that
+    are not ISO at all (e.g. "08/04/2026 11:27") get a second, per-value pass (format="mixed"). What is still
+    unreadable becomes NaT; with `what` given, the count is printed, so a loss is never silent."""
     s = values if isinstance(values, pd.Series) else pd.Series(values)
     if pd.api.types.is_datetime64_any_dtype(s):
         return s.dt.tz_localize("UTC") if s.dt.tz is None else s.dt.tz_convert("UTC")
-    return pd.to_datetime(s, utc=True, errors="coerce", format=fmt)
+    t = pd.to_datetime(s, utc=True, errors="coerce", format=fmt)
+    text = s.notna() & s.astype(str).str.strip().ne("") & ~s.astype(str).str.strip().str.lower().isin(["nan", "nat"])
+    miss = t.isna() & text
+    if fmt is not None and miss.any():
+        t = t.copy()
+        t[miss] = pd.to_datetime(s[miss], utc=True, errors="coerce", format="mixed")
+        miss = t.isna() & text
+    if what and miss.any():
+        print(f"  WARNING: {int(miss.sum())} of {len(s)} {what} times unreadable (NaT), e.g. {s[miss].iloc[0]!r}")
+    return t
 
 
 def epoch_seconds(values) -> np.ndarray:
