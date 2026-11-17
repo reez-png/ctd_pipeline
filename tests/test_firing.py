@@ -41,3 +41,12 @@ def test_a_cast_number_finds_its_cast(tmp_path):
     out, rep = F.fired_depths(pd.DataFrame({"cast_id": ["2"], "niskin": [1], "depth_m": [31.0]}),
                               F.load_firings(tmp_path, "ZZ"))
     assert out["depth_m"].tolist() == [28.74] and np.isclose(rep["d_median"], 2.26)
+
+
+def test_whole_metre_sheet_depths_take_the_fired_depth(tmp_path):
+    # the P45_07 chlorophyll sheet: depths 30, 15, 5 read as int64; the fired 27.48 must go in, not raise
+    _record(tmp_path)
+    s = pd.DataFrame({"cast_id": ["ZZ_CTD_02", "ZZ_CTD_02"], "niskin": [2, 6], "depth_m": [30, 5]})
+    assert s["depth_m"].dtype.kind == "i"
+    out, rep = F.fired_depths(s, F.load_firings(tmp_path, "ZZ"))
+    assert out["depth_m"].tolist() == [27.48, 5.0] and out["depth_nominal_m"].tolist() == [30.0, 5.0]

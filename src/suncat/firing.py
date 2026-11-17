@@ -43,7 +43,10 @@ def fired_depths(samples: pd.DataFrame, firings: pd.DataFrame, cast_col: str = "
     Adds depth_nominal_m and depth_source ("fired" or "nominal"). Returns (table, report): n, n_fired,
     n_nominal, and the nominal minus fired differences (median, min, max, in metres)."""
     s = samples.copy()
-    s["depth_nominal_m"] = pd.to_numeric(s[depth_col], errors="coerce")
+    # sheets often give whole-metre depths, read as integers: make the column float before fired depths go in
+    # (pandas 3 refuses to put 27.48 into an int64 column)
+    s[depth_col] = pd.to_numeric(s[depth_col], errors="coerce").astype(float)
+    s["depth_nominal_m"] = s[depth_col].copy()
     s["depth_source"] = "nominal"
     rep = dict(n=len(s), n_fired=0, n_nominal=len(s), d_median=np.nan, d_min=np.nan, d_max=np.nan,
                has_record=not firings.empty, has_niskin=niskin_col in s.columns)
