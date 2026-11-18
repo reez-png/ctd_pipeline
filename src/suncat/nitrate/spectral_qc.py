@@ -96,9 +96,10 @@ def _start_time(path) -> datetime | None:
 
 
 def ctd_wet_intervals(paths, cond_in: float = 1.0, p_in: float = 1.0) -> tuple[pd.DataFrame, list]:
-    """(cast, t_in, t_out, by) per CTD .cnv, epoch seconds UTC: the first and last scan with conductivity above
+    """(cast, t_in, t_out, by, t_first, t_last) per CTD .cnv, epoch seconds UTC: the first and last scan with
+    conductivity above
     cond_in (1 separates air from seawater in S/m or mS/cm), or, in a file with no conductivity column, with
-    pressure above p_in dbar (by says which). Also returns [(file name, reason)] for files left out."""
+    pressure above p_in dbar (by says which), and the record's first and last scan. Also returns [(file name, reason)] for files left out."""
     rows, skipped = [], []
     for p in sorted(Path(x) for x in paths):
         start = _start_time(p)
@@ -118,8 +119,9 @@ def ctd_wet_intervals(paths, cond_in: float = 1.0, p_in: float = 1.0) -> tuple[p
             skipped.append((p.name, "never wet")); continue
         t0 = (pd.Timestamp(start) - pd.Timestamp("1970-01-01")).total_seconds()
         ts = d[tcol].to_numpy(float)
-        rows.append(dict(cast=p.stem, t_in=t0 + ts[wet[0]], t_out=t0 + ts[wet[-1]], by=by))
-    return pd.DataFrame(rows, columns=["cast", "t_in", "t_out", "by"]), skipped
+        rows.append(dict(cast=p.stem, t_in=t0 + ts[wet[0]], t_out=t0 + ts[wet[-1]], by=by,
+                         t_first=t0 + float(np.nanmin(ts)), t_last=t0 + float(np.nanmax(ts))))
+    return pd.DataFrame(rows, columns=["cast", "t_in", "t_out", "by", "t_first", "t_last"]), skipped
 
 
 def in_cast(t_epoch, intervals: pd.DataFrame, margin_s: float = 60.0) -> np.ndarray:

@@ -116,6 +116,18 @@ def test_a_clock_already_applied_is_not_counted_twice(tmp_path, monkeypatch):
     assert np.allclose(out["response"]["table"]["tau_s"], 8.0, atol=1.5)
 
 
+def test_an_entry_delay_from_too_few_casts_is_refused(tmp_path, monkeypatch):
+    # P45_06 before the file move: one cast gave -201 s and the diagnosis fitted everything to it
+    C = _cruise(tmp_path, "time", 8.0, delay=0.0)
+    tl = C / "_audit" / "suna" / "time_lag"
+    tl.mkdir(parents=True)
+    pd.DataFrame({"cast": [f"{CRUISE}_CTD_{i:03d}" for i in range(1, 5)], "entry_offset_s": [-201.3, np.nan, np.nan, np.nan],
+                  "exit_offset_s": [np.nan, 28.1, np.nan, np.nan]}).to_csv(tl / f"{CRUISE}__suna_clock_events.csv", index=False)
+    monkeypatch.setenv("CTD_PIPELINE_ROOT", str(tmp_path))
+    with pytest.raises(SystemExit, match="rests on 1 cast"):
+        DSL.diagnose(CRUISE, bottles=False, say=lambda *a, **k: None)
+
+
 def _start_cast(tau, amp, T0=60.0, seed=0, zmax=120.0, v=0.5, noise=0.2):
     """One cast at v m/s down and up (20 s stop at the bottom), a tanh nitracline at 30 m seen through a tau s
     response, plus a transient amp * exp(-t / T0) from immersion (water or air left in the path)."""
