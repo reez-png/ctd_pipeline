@@ -19,8 +19,9 @@ match_depths()  each sample depth to the longest up-cast or bottom stop within m
 cast_stops()    both, from one cast's .cnv (timeS, pressure, temperature, conductivity when present).
 
 A stop shows the package was held there; it does not show a bottle was fired there. On P45_06 (Nov 2026) the
-up-casts held only at the bottom and at the surface (and once at 12 m): no hold at any mid-depth sheet depth, so
-build_bottle_table.py reports the stops there and keeps the sheet depths (STOP_DEPTHS = "report"). The match is by depth, so a
+up-casts held only at the bottom and at the surface (and once at 12 m): no hold at any mid-depth sheet depth, as
+expected of bottles fired while the rosette was moving, so build_bottle_table.py reports the stops there and keeps
+the sheet depths (STOP_DEPTHS = "report"). The match is by depth, so a
 sample whose sheet depth is far from every stop keeps its sheet depth, and a stop no sample matches is listed.
 """
 from __future__ import annotations

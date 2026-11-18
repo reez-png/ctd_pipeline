@@ -26,7 +26,14 @@ the SBE 55 and SUNA overwrite memory between deployments, so an un-offloaded cas
 > (`APPLY_BOTTLES = True`) finds the `.afm` by that matching name and runs Data Conversion in
 > "Create both data and bottle file" mode automatically. If you also want a separate archive copy, you
 > may keep one in `metadata\bottle_fire\`, but the working copy the pipeline reads must be in `L0\CTD\`.
-> (On P45_06 there were no bottle firings, so no `.afm`; casts run profile-only.)
+> (On P45_06 the Niskins were fired on the up-cast while the rosette was moving, without the SBE 55's
+> auto-fire log, so there is no `.afm` and the casts run profile-only. Nothing records where each bottle
+> closed: its depths are the sample sheet's targets, and the CTD record shows no hold at any of them (the
+> up-casts held only at the bottom and at the surface; `build_bottle_table.py`, `STOP_DEPTHS = "report"`). A
+> few near-surface samples may have come from a separate hand-deployed Niskin. On a cruise without the
+> auto-fire log, hold the rosette at each bottle depth for at least 30 s before firing: the stop then puts the
+> depth in the CTD record, and it gives the SUNA (response time about 6 to 7 s, so 95 % of a step in about
+> 20 s) time to read the water the bottle takes.)
 
 ---
 

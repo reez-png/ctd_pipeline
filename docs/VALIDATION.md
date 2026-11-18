@@ -63,6 +63,13 @@ proxy against discrete extractions, and the fit is provisional at this bottle co
 - **Few bottles, one cruise.** The nitrate and chlorophyll calibrations rest on 7 to 10 bottles from
   P45_06. The gain, in particular, leans on the deep, high-nitrate bottles of a single cast. These are
   cruise-specific and provisional until more cruises add bottles.
+- **P45_06 bottle depths are targets.** Its Niskins were fired on the up-cast while the rosette was moving, with no
+  auto-fire log, so each depth is the sample sheet's target, not where the bottle closed; the CTD record shows no
+  hold at any of them. A depth error matters only where nitrate changes with depth: the homogeneous-layer fit,
+  which uses only bottles where the down- and up-cast SUNA agree within 2 uM, gives gain 0.877 and offset -0.75
+  (18 bottles), against 0.886 and -0.59 from all 27, so the error does not move the calibration measurably; it
+  adds scatter at the nitracline. A few near-surface samples may come from a separate hand-deployed Niskin; the
+  mixed-layer bottles all read 0 to 0.07 uM, so that changes no comparison there.
 - **Onboard nitrate, not re-derived.** The onboard nitrate was computed with `SNA2503E.cal`, which is
   not currently in hand. The bottle correction absorbs the mean temperature and salinity bias, so the
   corrected product is usable, but a physics-based Sakamoto TCSS re-derivation is deferred until that

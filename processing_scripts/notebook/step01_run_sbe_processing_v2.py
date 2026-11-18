@@ -155,8 +155,9 @@ SHALLOW_LOOPEDIT_PSA     = "06b_loopedit_fixedmin.psa"
 SECTION_SHALLOW_FLOOR_DB = 5.0                       # on shallow casts, keep at least from here to the bottom
 
 # --- Bottle mode (auto-fire module) ----------------------------------------
-# OFF for cruises without water-bottle firings (e.g. P45_06). Turn ON for
-# P45_07 and later, where each cast has a matching .afm (Auto-Fire Module) file.
+# OFF for cruises without .afm files (e.g. P45_06: Niskins fired on the move, no
+# auto-fire log). Turn ON for P45_07 and later, where each cast has a matching
+# .afm (Auto-Fire Module) file.
 # When ON, DatCnv runs in "create both data and bottle file" mode with scan-range
 # source = Auto-Fire Module (.afm), producing <cast>.cnv (profile) AND <cast>.ros
 # (CTD data at each bottle firing). The profile chain is unchanged either way.

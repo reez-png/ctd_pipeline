@@ -293,7 +293,8 @@ For cruises where bottles were fired (each cast has an `.afm`), set `APPLY_BOTTL
 4. If `psa/10_bottlesum.psa` exists, runs **Bottle Summary** on each `.ros` → `L2/CTD/Bottle/<cast>.btl`.
    If it is absent, step01 still produces `.cnv` + `.ros` and skips only the `.btl` (with a note).
 
-`APPLY_BOTTLES = False` (the default, e.g. P45_06) leaves the profile chain completely unchanged.
+`APPLY_BOTTLES = False` (for a cruise without `.afm` files, e.g. P45_06, whose Niskins were fired on the move
+without the auto-fire log) leaves the profile chain completely unchanged.
 
 ---
 
