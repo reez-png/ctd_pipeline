@@ -12,6 +12,7 @@ What differs from P45 on purpose:
   * SBE 9plus pressure name prDM; ship heave makes pressure loops, flagged Loop Edit style; cast 3 has NO flag column
   * Bin Average files write the MEAN pressure of each bin (the P45_07 style), not the bin centre
   * bottles give the cast as a number for casts 1 and 3 and as a full cast id (hyphenated cruise) for casts 2 and 4
+  * the chlorophyll sheet has niskin and flag columns; one row (cast 2, Niskin 1) is flagged and must be left out
   * a bottle firing record (metadata/bottle_nitrate/<CRUISE>_bottle_ctd.csv, as build_bottle_nitrate_table.py
     writes it from .btl files) at the end of each up-cast stop: bottom, 0.6 and 0.3 of the cast depth, 2 m
 Known truth, so outputs can be checked:
@@ -29,6 +30,7 @@ import numpy as np
 import pandas as pd
 
 GAIN, OFFSET = 1.6, 0.04
+FLAGGED_CHL = 9.99      # the flagged sheet row: far off the truth, so the fit shows whether it was left out
 # cast number, d_lat, d_lon (from lat0/lon0), max depth (m), local clock start hour, has Loop Edit flag column
 CASTS = [(1, 0.00, 0.00, 60.0, 9, True), (2, -0.10, 0.15, 90.0, 12, True),
          (3, -0.22, 0.32, 130.0, 15, False), (4, -0.35, 0.50, 160.0, 21, True)]
@@ -130,7 +132,12 @@ def make_cruise(root, cruise: str = "ZZ12_03", lat0: float = -12.4, lon0: float 
                 chl_rows.append(dict(cruise=cruise.replace("_", "-"), station=f"T{num}",
                                      cast=(num if num % 2 else cast.replace("_", "-", 1)),
                                      date_time=f"{local:%m/%d/%Y %H:%M}", depth=zb, replicate="a",
-                                     chl=round(float(chl_true(zb)) * (1 + rng.normal(0, 0.04)), 3)))
+                                     chl=round(float(chl_true(zb)) * (1 + rng.normal(0, 0.04)), 3),
+                                     niskin=np.nan, flag=""))
+        if num == 2:                                                   # a misfired bottle, flagged on the sheet
+            chl_rows.append(dict(cruise=cruise.replace("_", "-"), station=f"T{num}", cast=num,
+                                 date_time=f"{local:%m/%d/%Y %H:%M}", depth=20, replicate="a", chl=FLAGGED_CHL,
+                                 niskin=1, flag="suspect misfire"))
         for zb in (10, 40, 55):
             if zb <= zmax - 3:
                 no3_rows.append(dict(cast_id=cast, depth_m=zb, nitrate_uM=round(float(no3_true(zb)), 2)))

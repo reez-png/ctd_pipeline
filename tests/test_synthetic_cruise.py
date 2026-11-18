@@ -61,6 +61,7 @@ def south(root):
 def test_step07_resolves_every_cast_and_recovers_the_calibration(south):
     cal = pd.read_csv(south / "_audit" / "productivity" / f"{SOUTH}__chl_calibration.csv", encoding="utf-8-sig")
     assert set(cal["cast"]) == {f"{SOUTH}_CTD_{n:03d}" for n in (1, 2, 3, 4)}   # numbers AND full hyphenated ids
+    assert not np.isclose(cal["bottle"].astype(float), GEN.FLAGGED_CHL).any()   # the sheet's flagged row left out
     u = cal[cal["used"].astype(str).str.lower() == "true"]
     gain, offset = np.polyfit(u["bottle"].astype(float), u["sensor"].astype(float), 1)
     assert abs(gain - GEN.GAIN) < 0.06 and abs(offset - GEN.OFFSET) < 0.03
