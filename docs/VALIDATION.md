@@ -66,10 +66,16 @@ proxy against discrete extractions, and the fit is provisional at this bottle co
 - **P45_06 bottle depths are targets.** Its Niskins were fired on the up-cast while the rosette was moving, with no
   auto-fire log, so each depth is the sample sheet's target, not where the bottle closed; the CTD record shows no
   hold at any of them. A depth error matters only where nitrate changes with depth: the homogeneous-layer fit,
-  which uses only bottles where the down- and up-cast SUNA agree within 2 uM, gives gain 0.877 and offset -0.75
-  (18 bottles), against 0.886 and -0.59 from all 27, so the error does not move the calibration measurably; it
-  adds scatter at the nitracline. A few near-surface samples may come from a separate hand-deployed Niskin; the
+  which uses only bottles where the down- and up-cast SUNA agree within 2 uM (at least 3 clean frames on each leg),
+  gives gain 0.862 and offset -0.52 (13 bottles, 4 above 2 uM), against 0.886 and -0.59 from all 27, so the error
+  does not move the calibration measurably; it adds scatter at the nitracline. A few near-surface samples may come from a separate hand-deployed Niskin; the
   mixed-layer bottles all read 0 to 0.07 uM, so that changes no comparison there.
+- **P45_07's gain rests on few homogeneous bottles.** Its up-casts read up to 16 uM above its down-casts in the
+  nitracline (probably water held in the optical path: the SUNA was mounted vertically), so only 6 of its 61 bottles pass the
+  homogeneous-layer test, and only 2 of those are above 2 uM: cast 08 and cast 15, both near 16 uM, which alone
+  imply gains of 0.89 and 1.03. The stated 0.89 / -0.39 is that fit without cast 15 (5 bottles); with it the fit is
+  0.957 / -0.53. The 0.89 is supported instead by step02b's fits to 53 bottles (lag-free 0.890, 95% CI 0.823 to
+  0.957; lag-corrected 0.919, 0.851 to 0.987) and by P45_06 (same SUNA, 0.862 to 0.886).
 - **Onboard nitrate, not re-derived.** The onboard nitrate was computed with `SNA2503E.cal`, which is
   not currently in hand. The bottle correction absorbs the mean temperature and salinity bias, so the
   corrected product is usable, but a physics-based Sakamoto TCSS re-derivation is deferred until that
