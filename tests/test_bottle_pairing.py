@@ -47,3 +47,28 @@ def test_a_hand_flag_survives_a_rebuild(tmp_path, monkeypatch, capsys):
     assert b.loc[(b["station"] == "P1") & (b["depth_m"] == 30), "flag"].tolist() == ["suspect: duplicates another depth"]
     assert (b.loc[b["depth_m"] != 30, "flag"] == "").all()
     assert "hand flag kept: P1 30" in capsys.readouterr().out
+
+
+def test_sheet_depths_move_to_the_upcast_stops(tmp_path, monkeypatch, capsys):
+    """No firing record (no .afm): each sheet depth takes the up-cast stop near it; one far from every stop keeps the
+    sheet depth, with the reason."""
+    import numpy as np
+    sys.path.insert(0, str(REPO / "tests"))
+    from test_stops import trace, _write_cnv
+    test_medium_pairing_is_kept_with_a_note_not_a_flag(tmp_path, monkeypatch)
+    t, p, temp = trace([(0.0, 30), (10.0, 60), (0.5, 10), (30.0, 40), (5.6, 40), (0.0, 20)])
+    _write_cnv(tmp_path / "ctd" / "ZZ_CTD_03.cnv", t, p, temp, start="Apr 16 2026 11:16:12")        # P1: sheet 5 and 30 m
+    monkeypatch.setattr(BT, "CTD_1S_ROOT", tmp_path / "none")
+    BT.main()
+    b = pd.read_csv(tmp_path / "bottles" / "ZZ_bottle_nitrate.csv", keep_default_na=False)
+    assert "depth_source" not in b.columns and set(b["depth_m"]) == {5, 30}      # "report": sheet depths kept
+    assert "ZZ_CTD_03: stops from the bottom up" in capsys.readouterr().out
+    monkeypatch.setattr(BT, "STOP_DEPTHS", "apply")
+    BT.main()
+    b = pd.read_csv(tmp_path / "bottles" / "ZZ_bottle_nitrate.csv", keep_default_na=False)
+    p1 = b[b["station"] == "P1"].set_index("depth_nominal_m")
+    assert p1.loc[5, "depth_source"] == "stop" and abs(p1.loc[5, "depth_m"] - 5.57) < 0.3
+    assert p1.loc[30, "depth_source"] == "stop" and abs(p1.loc[30, "depth_m"] - 29.84) < 0.3
+    assert (b.loc[b["station"] == "P3", "depth_source"] == "sheet").all()  # its .cnv has no data
+    out = capsys.readouterr().out
+    assert "2 of 2 sheet depths at a stop" in out and "ZZ_CTD_06: stops from the bottom up in" in out
