@@ -74,8 +74,10 @@ proxy against discrete extractions, and the fit is provisional at this bottle co
   nitracline (probably water held in the optical path: the SUNA was mounted vertically), so only 6 of its 61 bottles pass the
   homogeneous-layer test, and only 2 of those are above 2 uM: cast 08 and cast 15, both near 16 uM, which alone
   imply gains of 0.89 and 1.03. The stated 0.89 / -0.39 is that fit without cast 15 (5 bottles); with it the fit is
-  0.957 / -0.53. The 0.89 is supported instead by step02b's fits to 53 bottles (lag-free 0.890, 95% CI 0.823 to
-  0.957; lag-corrected 0.919, 0.851 to 0.987) and by P45_06 (same SUNA, 0.862 to 0.886).
+  0.957 / -0.53. The 0.89 is supported instead by step02b's fits to 52 bottles (lag-free 0.878, 95% CI 0.814 to
+  0.941; lag-corrected 0.908, 0.843 to 0.974; down-cast only 0.837, 0.764 to 0.909) and by P45_06 (same SUNA,
+  0.862 to 0.886). Cast 30's 79 m bottle is flagged: 12.8 uM where the SUNA reads about 17.4 uM in uniform water
+  and station P3 at 80 m has 18.1, close to the same cast's 30 m bottle (12.4), so probably water from about 30 m.
 - **Onboard nitrate, not re-derived.** The onboard nitrate was computed with `SNA2503E.cal`, which is
   not currently in hand. The bottle correction absorbs the mean temperature and salinity bias, so the
   corrected product is usable, but a physics-based Sakamoto TCSS re-derivation is deferred until that
