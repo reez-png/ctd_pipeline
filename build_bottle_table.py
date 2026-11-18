@@ -22,6 +22,13 @@ Confidence rules (stated, so they can be reviewed):
 A pairing can be high-confidence yet still be EXCLUDED from the bottle table if that
 cast has no SUNA data -- the audit records both facts separately.
 
+A medium-confidence pairing is KEPT, with the reason in the bottle table's `pairing_note` column. Until Nov 2026 it
+was written into `flag` (REVIEW_PAIRING_<gap>min); since step03_nitrate_qc, step02b and the SUNA bottle tests leave
+out any row whose `flag` is non-empty, `flag` is now left blank here and means only "exclude this bottle" (BDL, NES,
+a suspected misfire, set by hand). To exclude a medium pairing after checking the field log, put a reason in `flag`.
+A flag set by hand is kept when the table is rebuilt (matched by station, depth and nitrate value); one that no
+longer matches a row is printed as a warning.
+
 USAGE (edit the settings, then run):
     python build_bottle_table.py
 """
@@ -90,6 +97,35 @@ def confidence(gap_min: float) -> str:
     return "low"
 
 
+def _key(station, depth, nitrate) -> tuple:
+    d = pd.to_numeric(pd.Series([depth, nitrate]), errors="coerce")
+    return (str(station).strip(), round(float(d[0]), 3) if pd.notna(d[0]) else None,
+            round(float(d[1]), 4) if pd.notna(d[1]) else None)
+
+
+def carry_hand_flags(bottle: pd.DataFrame, bottle_path: Path) -> tuple[list[str], list[str]]:
+    """A flag set by hand in the existing bottle table (a reason to exclude a bottle) survives a rebuild: it is copied
+    onto the new row with the same station, depth and nitrate value (the value tells replicates apart). A flag whose
+    row is gone (a station re-paired, a value corrected in the nutrient file) is reported, not silently dropped."""
+    if not bottle_path.exists() or bottle.empty:
+        return [], []
+    old = pd.read_csv(bottle_path, keep_default_na=False, dtype=str)
+    if "flag" not in old.columns:
+        return [], []
+    old = old[old["flag"].str.strip() != ""]
+    new_keys = {_key(r["station"], r["depth_m"], r["nitrate_uM"]): i for i, r in bottle.iterrows()}
+    carried, lost = [], []
+    for _, r in old.iterrows():
+        k = _key(r.get("station", ""), r.get("depth_m", ""), r.get("nitrate_uM", ""))
+        desc = f"{k[0]} {r.get('depth_m', '')} m, {r.get('nitrate_uM', '')} uM: {r['flag']}"
+        if k in new_keys:
+            bottle.loc[new_keys[k], "flag"] = r["flag"]
+            carried.append(desc)
+        else:
+            lost.append(desc)
+    return carried, lost
+
+
 def main() -> None:
     # --- load nutrients for this cruise ---
     raw = pd.read_csv(NUTRIENT_FILE)
@@ -118,21 +154,21 @@ def main() -> None:
                 best_gap, best_cast = gap, cast_id
         conf = confidence(best_gap) if best_cast else "none"
         has_suna = best_cast in suna
-        review_flag = ""   # written into the bottle table's flag column for non-high matches
+        review_note = ""   # written into the bottle table's pairing_note column for medium-confidence matches
         if has_suna and conf == "high":
             reason = f"matched {best_cast} at {best_gap:.0f} min; cast has SUNA -> usable (high confidence)"
             usable = True
         elif has_suna and conf == "medium":
-            reason = f"matched {best_cast} at {best_gap:.0f} min (medium confidence, > {HIGH_TOL_MIN} min); cast has SUNA -> KEPT but FLAGGED for review"
+            reason = f"matched {best_cast} at {best_gap:.0f} min (medium confidence, > {HIGH_TOL_MIN} min); cast has SUNA -> KEPT, with a pairing_note for review"
             usable = True
-            review_flag = f"REVIEW_PAIRING_{best_gap:.0f}min"
+            review_note = f"REVIEW_PAIRING_{best_gap:.0f}min: medium-confidence time pairing, check the field log"
         elif not has_suna:
             reason = f"matched {best_cast} at {best_gap:.0f} min, but that cast has NO SUNA product -> excluded (cannot calibrate against SUNA)"
             usable = False
         else:  # low confidence
             reason = f"nearest cast {best_cast} is {best_gap:.0f} min away (> {MED_TOL_MIN} min) -> too weak to trust -> excluded"
             usable = False
-        station_to_cast[station] = (best_cast, usable, review_flag)
+        station_to_cast[station] = (best_cast, usable, review_note)
         audit_rows.append({
             "cruise_id": CRUISE_ID, "station": station,
             "sample_time_utc": stime, "matched_cast": best_cast,
@@ -150,7 +186,7 @@ def main() -> None:
     # --- build the step03 bottle table from USABLE stations only ---
     keep_rows = []
     for _, r in nut.iterrows():
-        cast_id, usable, review_flag = station_to_cast.get(r[COL_STATION], (None, False, ""))
+        cast_id, usable, review_note = station_to_cast.get(r[COL_STATION], (None, False, ""))
         if not usable:
             continue
         keep_rows.append({
@@ -161,10 +197,12 @@ def main() -> None:
             "time_utc": r["_t"].isoformat() if pd.notna(r["_t"]) else "",
             "nitrate_uM": r[COL_NITRATE],
             "replicate_id": f"{r[COL_STATION]}-{r[COL_DEPTH]:g}m" if pd.notna(r[COL_DEPTH]) else r[COL_STATION],
-            "flag": review_flag,
+            "flag": "",
+            "pairing_note": review_note,
         })
     bottle = pd.DataFrame(keep_rows)
     bottle_path = BOTTLE_DIR / f"{CRUISE_ID}_bottle_nitrate.csv"
+    carried, lost = carry_hand_flags(bottle, bottle_path)
     bottle.to_csv(bottle_path, index=False, encoding="utf-8-sig")
 
     # --- report ---
@@ -178,6 +216,10 @@ def main() -> None:
               f"SUNA={r['cast_has_suna']})")
     print(f"\nUsable stations: {audit['usable_for_calibration'].sum()} of {len(audit)}")
     print(f"Bottle table rows written: {len(bottle)}")
+    for r in carried:
+        print(f"  hand flag kept: {r}")
+    for r in lost:
+        print(f"  WARNING: hand flag NOT carried over (no matching row now; check the nutrient file): {r}")
     print(f"\nAudit  -> {audit_path}")
     print(f"Bottle -> {bottle_path}")
     if len(bottle) < 20:
