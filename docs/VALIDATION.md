@@ -63,6 +63,21 @@ proxy against discrete extractions, and the fit is provisional at this bottle co
 - **Few bottles, one cruise.** The nitrate and chlorophyll calibrations rest on 7 to 10 bottles from
   P45_06. The gain, in particular, leans on the deep, high-nitrate bottles of a single cast. These are
   cruise-specific and provisional until more cruises add bottles.
+- **P45_06 bottle depths are targets.** Its Niskins were fired on the up-cast while the rosette was moving, with no
+  auto-fire log, so each depth is the sample sheet's target, not where the bottle closed; the CTD record shows no
+  hold at any of them. A depth error matters only where nitrate changes with depth: the homogeneous-layer fit,
+  which uses only bottles where the down- and up-cast SUNA agree within 2 uM (at least 3 clean frames on each leg),
+  gives gain 0.862 and offset -0.52 (13 bottles, 4 above 2 uM), against 0.886 and -0.59 from all 27, so the error
+  does not move the calibration measurably; it adds scatter at the nitracline. A few near-surface samples may come from a separate hand-deployed Niskin; the
+  mixed-layer bottles all read 0 to 0.07 uM, so that changes no comparison there.
+- **P45_07's gain rests on few homogeneous bottles.** Its up-casts read up to 16 uM above its down-casts in the
+  nitracline (probably water held in the optical path: the SUNA was mounted vertically), so only 6 of its 61 bottles pass the
+  homogeneous-layer test, and only 2 of those are above 2 uM: cast 08 and cast 15, both near 16 uM, which alone
+  imply gains of 0.89 and 1.03. The stated 0.89 / -0.39 is that fit without cast 15 (5 bottles); with it the fit is
+  0.957 / -0.53. The 0.89 is supported instead by step02b's fits to 52 bottles (lag-free 0.878, 95% CI 0.814 to
+  0.941; lag-corrected 0.908, 0.843 to 0.974; down-cast only 0.837, 0.764 to 0.909) and by P45_06 (same SUNA,
+  0.862 to 0.886). Cast 30's 79 m bottle is flagged: 12.8 uM where the SUNA reads about 17.4 uM in uniform water
+  and station P3 at 80 m has 18.1, close to the same cast's 30 m bottle (12.4), so probably water from about 30 m.
 - **Onboard nitrate, not re-derived.** The onboard nitrate was computed with `SNA2503E.cal`, which is
   not currently in hand. The bottle correction absorbs the mean temperature and salinity bias, so the
   corrected product is usable, but a physics-based Sakamoto TCSS re-derivation is deferred until that

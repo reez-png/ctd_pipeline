@@ -18,7 +18,8 @@ DatCnv → Filter → Align CTD → Cell Thermal Mass → Section (python) → L
 ```
 
 `APPLY_WILDEDIT = False`, `APPLY_FILTER = True`, `APPLY_CELLTM = True`, `APPLY_SECTION = True`.
-`APPLY_BOTTLES` is per cruise (False for P45_06; True for P45_07 and later cruises with `.afm`).
+`APPLY_BOTTLES` is per cruise (False for P45_06, which has no `.afm`: its Niskins were fired on the move without the
+auto-fire log; True for P45_07 and later cruises with `.afm`).
 
 ## Per-module parameters
 

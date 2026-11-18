@@ -69,7 +69,9 @@ CTD_1S_ROOT  = product_dir(CRUISE_ID, "ctd_1s")        # fallback for the stops 
 #             a sheet depth with no stop within max(5 m, 15 %) keeps the sheet depth
 #   "off"     neither
 # P45_06 is "report": its up-casts held only at the bottom and at the surface before recovery (and once at 12 m),
-# never at a mid-depth sheet depth, so the stops cannot be where those bottles closed (Nov 2026).
+# never at a mid-depth sheet depth, so the stops cannot be where those bottles closed (Nov 2026). That fits how they
+# were taken: fired on the up-cast while the rosette was moving, with perhaps a few near-surface samples from a
+# separate hand-deployed Niskin (Reez, Nov 2026). Its depths are the sheet's targets.
 STOP_DEPTHS = "report"
 BOTTLE_DIR   = CRUISE_DIR / "metadata" / "bottle_nitrate"
 
