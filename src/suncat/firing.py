@@ -18,6 +18,8 @@ import pandas as pd
 
 from suncat.casts import match_cast
 
+FAR_M = 3.0      # sheet and fired depths further apart than this are listed: a wrong Niskin or a wrong sheet depth
+
 
 def firings_path(cruise_dir, cruise_id: str) -> Path:
     return Path(cruise_dir) / "metadata" / "bottle_nitrate" / f"{cruise_id}_bottle_ctd.csv"
@@ -49,7 +51,7 @@ def fired_depths(samples: pd.DataFrame, firings: pd.DataFrame, cast_col: str = "
     s["depth_nominal_m"] = s[depth_col].copy()
     s["depth_source"] = "nominal"
     rep = dict(n=len(s), n_fired=0, n_nominal=len(s), d_median=np.nan, d_min=np.nan, d_max=np.nan,
-               has_record=not firings.empty, has_niskin=niskin_col in s.columns)
+               has_record=not firings.empty, has_niskin=niskin_col in s.columns, far=[])
     if firings.empty or niskin_col not in s.columns:
         return s, rep
     casts = firings["cast_id"].unique()
@@ -67,6 +69,14 @@ def fired_depths(samples: pd.DataFrame, firings: pd.DataFrame, cast_col: str = "
     rep.update(n_fired=int(hit.sum()), n_nominal=int((~hit).sum()))
     if len(d):
         rep.update(d_median=float(d.median()), d_min=float(d.min()), d_max=float(d.max()))
+    far = hit & ((s["depth_nominal_m"] - fz).abs() > FAR_M)
+    seen = set()
+    for i in s.index[far]:
+        k = (str(s.at[i, cast_col]), int(nk[i]))
+        if k not in seen:                                          # replicates of one Niskin listed once
+            seen.add(k)
+            rep["far"].append(dict(cast=k[0], niskin=k[1], nominal=float(s.at[i, "depth_nominal_m"]),
+                                   fired=float(fz[i])))
     return s, rep
 
 
@@ -83,4 +93,9 @@ def describe(rep: dict, label: str = "samples") -> str:
               f"{rep['d_max']:+.1f} m")
     if rep["n_nominal"]:
         s += f"; {rep['n_nominal']} left at the nominal depth (cast or Niskin not in the record)"
+    if rep.get("far"):
+        items = "; ".join(f"{f['cast'].split('_')[-1]} Niskin {f['niskin']}: sheet {f['nominal']:g} m, fired "
+                          f"{f['fired']:.1f} m" for f in rep["far"][:8])
+        s += (f"\n    CHECK, sheet and firing record more than {FAR_M:g} m apart (a wrong Niskin number or sheet "
+              f"depth?): {items}" + (f" (+{len(rep['far']) - 8} more)" if len(rep["far"]) > 8 else ""))
     return s
