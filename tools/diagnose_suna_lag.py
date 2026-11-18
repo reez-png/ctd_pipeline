@@ -6,7 +6,8 @@
 
 Reads only; writes <cruise>/_audit/suna/<cruise>__suna_lag_diagnosis.csv.
 
-1. CLOCK. step04 times when the SUNA and the CTD enter and leave the water. ENTRY is used for the delay: when the
+1. CLOCK. step04 times when the SUNA and the CTD enter and leave the water. ENTRY (the SUNA's stable water, by its
+   peak counts; suncat.nitrate.water_entry) is used for the delay: when the
    path fills on immersion the SUNA cannot be late for any reason but its clock. EXIT is reported beside it,
    because an optical path that keeps water after leaving the sea reads "wet" for longer and biases exit. The
    delay is the median entry offset (bootstrap 95% CI of the median, cast-to-cast drift tested).
@@ -96,6 +97,9 @@ def _slope(x, y):
 
 
 # ------------------------------------------------------------------ 1. clock
+MIN_ENTRY_CASTS = 3      # an event-based delay needs at least this many casts (P45_06, Nov 2026: one cast gave -201 s)
+
+
 def clock(cruise: str, say=print) -> dict:
     tl = pp.cruise_dir(cruise) / "_audit" / "suna" / "time_lag"
     ev_f = tl / f"{cruise}__suna_clock_events.csv"
@@ -114,6 +118,12 @@ def clock(cruise: str, say=print) -> dict:
         f"{out['entry_ci'][1]:+.1f} s, {out['n_entry']} casts)")
     say(f"  water exit : median {out['exit_median']:+.1f} s (95% CI {out['exit_ci'][0]:+.1f} to {out['exit_ci'][1]:+.1f} s, "
         f"{out['n_exit']} casts)")
+    if "entry_change_s" in ev:
+        ch = ev["entry_change_s"].astype(float)
+        out.update(change_median=float(ch.median()), change_ci=_boot_median_ci(ch), n_change=int(ch.notna().sum()))
+        say(f"  first change before the entry (splash, part-filled path; not the clock): median "
+            f"{out['change_median']:+.1f} s (95% CI {out['change_ci'][0]:+.1f} to {out['change_ci'][1]:+.1f} s, "
+            f"{out['n_change']} casts)")
     if len(d):
         say(f"  exit minus entry, same cast: median {out['exit_minus_entry']:+.1f} s over {len(d)} casts, sign test "
             f"p = {out['p_sign']:.3f}  (a path that holds water after leaving the sea makes exit later than entry)")
@@ -406,6 +416,10 @@ def diagnose(cruise: str, delay: float | None = None, bottles: bool = True, say=
     if delay is None:
         if not ck:
             raise SystemExit("no delay: run step04 for this cruise, or pass --delay")
+        if ck["n_entry"] < MIN_ENTRY_CASTS or not np.isfinite(ck["entry_ci"][0]):
+            raise SystemExit(f"no delay: the water-entry offset rests on {ck['n_entry']} cast(s) (at least "
+                             f"{MIN_ENTRY_CASTS} are needed for a median with an interval); pass --delay, e.g. the "
+                             "applied clock offset, and say where it comes from")
         # step04's events are measured on the raw (uncorrected) co-located product, so they are the RAW clock;
         # if step02/step03 already shifted the frames, only the remainder is applied here
         delay = round((ck["entry_median"] + a_off) * 2) / 2
