@@ -50,3 +50,11 @@ def test_whole_metre_sheet_depths_take_the_fired_depth(tmp_path):
     assert s["depth_m"].dtype.kind == "i"
     out, rep = F.fired_depths(s, F.load_firings(tmp_path, "ZZ"))
     assert out["depth_m"].tolist() == [27.48, 5.0] and out["depth_nominal_m"].tolist() == [30.0, 5.0]
+
+
+def test_far_apart_sheet_and_firing_are_listed_once_per_niskin(tmp_path):
+    _record(tmp_path)
+    s = pd.DataFrame({"cast_id": ["ZZ_CTD_02"] * 3, "niskin": [4, 4, 2], "depth_m": [30, 30, 30]})
+    out, rep = F.fired_depths(s, F.load_firings(tmp_path, "ZZ"))
+    assert rep["far"] == [dict(cast="ZZ_CTD_02", niskin=4, nominal=30.0, fired=14.6)]     # 2 (27.48) is within 3 m
+    assert "CHECK" in F.describe(rep) and "02 Niskin 4: sheet 30 m, fired 14.6 m" in F.describe(rep)

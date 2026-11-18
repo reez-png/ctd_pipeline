@@ -9,11 +9,16 @@ has open. This reads the notebook from the working tree, or from `git show <rev>
 each `NAME = ...` settings line given with --set (the line must occur exactly once in the code cells),
 and executes it with the notebook's own folder as the working directory. The notebook file is never
 written, so no outputs or edited settings end up in the repo. --save writes the executed copy elsewhere.
+
+Headless: the kernel gets SUNCAT_HEADLESS=1 and the notebooks skip their interactive widgets (there is no frontend
+to show them, and on Windows a step06 cell right after its widget viewer hung twice, Nov 2026). On Windows the
+selector event loop is used, as pyzmq's own warning advises: the default Proactor loop lacks add_reader.
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
 import subprocess
 import sys
@@ -65,6 +70,13 @@ def main(argv=None) -> int:
     ap.add_argument("--quiet", action="store_true", help="do not print cell output")
     a = ap.parse_args(argv)
 
+    if sys.platform == "win32":
+        import asyncio
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)   # the policy API is deprecated from Python 3.14
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    os.environ["SUNCAT_HEADLESS"] = "1"            # inherited by the kernel: notebooks skip their widgets
     from nbclient import NotebookClient
     from nbclient.exceptions import CellExecutionError
 
