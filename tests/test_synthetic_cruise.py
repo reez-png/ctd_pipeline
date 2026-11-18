@@ -84,6 +84,10 @@ def test_step08_bins_carry_the_ctd_scan_counts_and_the_truth(south):
         assert abs(np.nanmedian(d["nitrate_uM"] - GEN.no3_true(d["depSM"]))) < 0.1
         risk = d["chl_npq_risk"].astype(str).str.lower().eq("true")
         assert risk.any() == daylit and not risk[d["pressure_db"] > 10].any()
+        # no lag in the synthetic SUNA: down and up agree, so no bin is flagged, and most bins are assessed
+        hf = d["nitrate_hyst_flag"].astype(str).str.lower()
+        assert not hf.eq("true").any() and hf.eq("false").mean() > 0.5
+        assert d["nitrate_updown_uM"].abs().max() < 1.0
 
 
 def test_step06_keeps_equatorial_stations(root):
