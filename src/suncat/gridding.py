@@ -30,6 +30,16 @@ via suncat.suna_response; empty when the cruise has none: not assessed), the SUN
 and a non-photochemical-quenching risk
 flag for chlorophyll in daylit near-surface bins (the criterion step07 uses to exclude bottles from its fit).
 
+Where the down-cast and up-cast disagree (Nov 2026), per bin: the gridded nitrate is the down-cast only, and a
+SUNA that lags, or holds water in its optical path, reads the two legs differently wherever nitrate changes with
+depth. nitrate_updown_uM is the up-cast's value at the bin centre minus the down-cast's, each from that leg's own
+frames within +-hyst_win_dbar (a straight line through them read at the centre; the up-cast's clean calibrated
+frames, the down-cast frames the grid uses; each leg needs hyst_min_per_leg frames, else empty), and nitrate_hyst_flag is True where it exceeds hyst_tol_uM in size, False
+where it does not, empty where either leg is too thin or the bin has no nitrate. The window, the 3 frames and the
+2 uM are the homogeneous-layer calibration's (suncat.nitrate.calibration). The flag marks where the down-cast
+value is in doubt; it does not say which leg is right. It measures what lag_limited only states: step03 sets
+lag_limited on every frame of every cast.
+
 Pure functions on DataFrames plus thin readers; the pipeline notebook resolves the folders.
 """
 from __future__ import annotations
@@ -60,6 +70,9 @@ class GridConfig:
     utc_offset_hours: float = 0.0    # fallback for a cast with no longitude: local time = UTC + this
     solar_time: bool = True          # daylight by local solar time, UTC + longitude / 15 h, when known
     min_frames: int = 1              # minimum frames for a bin value (SBE Bin Average MinScansPerBin)
+    hyst_win_dbar: float = 2.5       # down/up comparison window around each bin centre
+    hyst_min_per_leg: int = 3        # frames needed on each leg inside the window
+    hyst_tol_uM: float = 2.0         # |up - down| above this flags the bin
     max_ctd_gap_s: float = 1.0       # fallback only: a frame must lie within this of a CTD 1 s record
 
 
@@ -73,6 +86,8 @@ class CastStats:
     nitrate_bins: int = 0
     nitrate_n_median: float = np.nan
     nitrate_n_max: int = 0
+    nitrate_hyst_assessed: int = 0
+    nitrate_hyst_flagged: int = 0
     ctd_bin_offset_max: float = np.nan
     chl_rows: int = 0
     chl_used: int = 0
@@ -135,6 +150,39 @@ def bin_stats(p, values, binsize: float, min_frames: int = 1) -> pd.DataFrame:
     return g[g["n"] >= min_frames]
 
 
+def _leg_value_at(c, p, v, win, min_n):
+    """One leg's value at depth c from its values within +-win: a straight line through them evaluated at c
+    when they span at least 1 dbar (so a leg whose frames crowd at one end of the window, a bottle stop say, is
+    not read as the water at c), else their median if they sit within 0.5 dbar of c, else NaN."""
+    a, b = np.searchsorted(p, c - win, "left"), np.searchsorted(p, c + win, "right")
+    if b - a < min_n:
+        return np.nan
+    pp, vv = p[a:b], v[a:b]
+    if pp[-1] - pp[0] >= 1.0:
+        k, m = np.polyfit(pp - c, vv, 1)
+        return float(m)
+    return float(np.median(vv)) if abs(np.median(pp) - c) <= 0.5 else np.nan
+
+
+def updown_difference(centres, p_down, v_down, p_up, v_up, win: float, min_per_leg: int) -> np.ndarray:
+    """Up minus down at each centre, each leg's value from its own values within +-win (_leg_value_at); NaN where
+    a leg has fewer than min_per_leg values there. Comparing window medians instead would read a depth gradient
+    as a disagreement whenever the two legs' frames sit at different depths in the window (the up-cast's bottle
+    stops): 2 uM across a 1 uM/dbar nitracline with a stop 2 dbar off the centre."""
+    out = np.full(len(centres), np.nan)
+    legs = []
+    for p, v in ((p_down, v_down), (p_up, v_up)):
+        p, v = np.asarray(p, float), np.asarray(v, float)
+        ok = np.isfinite(p) & np.isfinite(v)
+        o = np.argsort(p[ok])
+        legs.append((p[ok][o], v[ok][o]))
+    for i, c in enumerate(np.asarray(centres, float)):
+        dn = _leg_value_at(c, *legs[0], win, min_per_leg)
+        up = _leg_value_at(c, *legs[1], win, min_per_leg)
+        out[i] = up - dn
+    return out
+
+
 def npq_risk(bin_p: np.ndarray, start_time, cfg: GridConfig, lon: float | None = None) -> pd.Series:
     """True where a bin is at or above npq_depth on a cast that started in daylight; NA if the time is unknown.
     Daylight is judged in local solar time, UTC + lon / 15 h, when the cast's longitude is known (cfg.solar_time),
@@ -181,8 +229,8 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
     st.ctd_bins = len(out)
 
     # ---- nitrate (L2 nitrate_qc, one row per SUNA frame)
-    cols = ["nitrate_uM", "nitrate_n", "nitrate_sd", "nitrate_lag_limited", "nitrate_slow_response", "suna_tau_s",
-            "suna_time_offset_s"]
+    cols = ["nitrate_uM", "nitrate_n", "nitrate_sd", "nitrate_updown_uM", "nitrate_hyst_flag", "nitrate_lag_limited",
+            "nitrate_slow_response", "suna_tau_s", "suna_time_offset_s"]
     if nitrate is None or nitrate.empty:
         st.notes.append("no nitrate product")
         for c in cols:
@@ -222,6 +270,26 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
         out["nitrate_uM"] = s["mean"].reindex(idx).to_numpy()
         out["nitrate_n"] = pd.to_numeric(s["n"].reindex(idx), errors="coerce").fillna(0).astype(int).to_numpy()
         out["nitrate_sd"] = s["sd"].reindex(idx).to_numpy()
+        # down/up disagreement around each bin: the down-cast frames this grid uses against the up-cast's clean ones
+        up = ~down & clean & finite
+        pz_up = pz.where(pz.notna(), pd.to_numeric(nf["pressure_db"], errors="coerce"))
+        up &= pz_up.notna()
+        v = pd.to_numeric(nf["no3_qc"], errors="coerce")
+        diff = updown_difference(out["pressure_db"].to_numpy(float), pz[use], v[use], pz_up[up], v[up],
+                                 cfg.hyst_win_dbar, cfg.hyst_min_per_leg)
+        has = out["nitrate_n"].to_numpy() > 0
+        diff = np.where(has, diff, np.nan)
+        out["nitrate_updown_uM"] = diff
+        out["nitrate_hyst_flag"] = pd.Series(np.where(np.isfinite(diff), np.abs(diff) > cfg.hyst_tol_uM, pd.NA),
+                                             dtype="boolean").to_numpy()
+        st.nitrate_hyst_assessed = int(np.isfinite(diff).sum())
+        flagged = np.isfinite(diff) & (np.abs(diff) > cfg.hyst_tol_uM)
+        st.nitrate_hyst_flagged = int(flagged.sum())
+        if st.nitrate_hyst_flagged:
+            zf = out.loc[flagged, "pressure_db"]
+            st.notes.append(f"down and up differ by more than {cfg.hyst_tol_uM:g} uM in {st.nitrate_hyst_flagged} of "
+                            f"{st.nitrate_hyst_assessed} assessed bins ({zf.min():g} to {zf.max():g} dbar; largest "
+                            f"{np.nanmax(np.abs(diff)):.1f} uM)")
         lag = bool(_flag(nf.loc[use, "lag_limited"]).any()) if "lag_limited" in nf and use.any() else False
         out["nitrate_lag_limited"] = pd.Series(np.where(out["nitrate_n"] > 0, lag, pd.NA), dtype="boolean").to_numpy()
         # the cast's response, where the cruise states it: flag only bins with a value, as for lag_limited

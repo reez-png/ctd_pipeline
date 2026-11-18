@@ -204,3 +204,46 @@ def test_slow_response_travels_with_the_nitrate(ctd):
     # no response file for the cruise: not assessed, so empty, not False
     out, _ = g.grid_cast("C1", df, meta, f)
     assert out["nitrate_slow_response"].isna().all() and out["suna_tau_s"].isna().all()
+
+
+def test_updown_difference_needs_both_legs():
+    d = g.updown_difference([10, 20], p_down=[9.5, 10, 10.5, 20], v_down=[1, 1, 1, 5], p_up=[9.6, 10.2, 10.4, 20, 20.1],
+                            v_up=[4, 4, 4, 5, 5], win=1.0, min_per_leg=3)
+    assert d[0] == pytest.approx(3.0) and np.isnan(d[1])          # at 20 dbar a leg has fewer than 3 values
+
+
+def test_bins_where_down_and_up_disagree_are_flagged(ctd):
+    """A lag, or water held in the optical path: the up-cast reads high below 9.5 dbar. The down-cast value stays
+    the grid's value; the bin is flagged where |up - down| > 2 uM, left empty where a leg is too thin."""
+    df, meta = ctd
+    rows = []
+    for z in (8.0, 9.0, 10.0, 11.0):
+        rows += [(z - 0.2, "down", True, 1.0, True), (z, "down", True, 1.0, True), (z + 0.2, "down", True, 1.0, True)]
+    for z, v, n in ((8.0, 1.3, 3), (9.0, 1.3, 3), (10.0, 4.5, 3), (11.0, 4.5, 2)):
+        rows += [(z + 0.1 * k, "up", True, v, True) for k in range(n)]
+    out, st = g.grid_cast("C1", df, meta, frames(rows), cfg=g.GridConfig(hyst_win_dbar=0.45))
+    r = out.set_index("pressure_db")
+    assert r.loc[8.0, "nitrate_updown_uM"] == pytest.approx(0.3) and r.loc[8.0, "nitrate_hyst_flag"] == False  # noqa: E712
+    assert r.loc[10.0, "nitrate_updown_uM"] == pytest.approx(3.5) and r.loc[10.0, "nitrate_hyst_flag"] == True  # noqa: E712
+    assert pd.isna(r.loc[11.0, "nitrate_hyst_flag"]) and np.isnan(r.loc[11.0, "nitrate_updown_uM"])
+    assert r.loc[10.0, "nitrate_uM"] == 1.0                                     # the value is still the down-cast's
+    assert st.nitrate_hyst_assessed == 3 and st.nitrate_hyst_flagged == 1
+    assert any("differ by more than 2 uM in 1 of 3 assessed bins (10 to 10 dbar" in n for n in st.notes)
+    row = st.row()
+    assert row["nitrate_hyst_flagged"] == 1 and row["nitrate_hyst_assessed"] == 3
+
+
+def test_no_upcast_frames_leave_the_flag_empty(ctd):
+    df, meta = ctd
+    out, st = g.grid_cast("C1", df, meta, frames([(9.0, "down", True, 2.0, False)] * 4))
+    assert out["nitrate_hyst_flag"].isna().all() and st.nitrate_hyst_assessed == 0
+
+
+def test_a_gradient_with_frames_at_different_depths_is_not_a_disagreement():
+    """No lag, nitrate rising 1 uM/dbar; the up-cast's frames crowd at a bottle stop 2 dbar below the centre.
+    Window medians would read 2 uM of disagreement; the legs read at the centre agree."""
+    pd_ = np.linspace(47.6, 52.4, 12); pu = np.r_[np.full(10, 52.0), 49.0, 51.0]
+    d = g.updown_difference([50.0], pd_, pd_ - 40.0, pu, pu - 40.0, win=2.5, min_per_leg=3)
+    assert abs(d[0]) < 0.05
+    pu = np.full(8, 52.0)                                         # every up frame at the stop: too far to read 50
+    assert np.isnan(g.updown_difference([50.0], pd_, pd_ - 40.0, pu, pu - 40.0, 2.5, 3)[0])

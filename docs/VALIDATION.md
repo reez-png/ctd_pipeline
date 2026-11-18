@@ -78,6 +78,15 @@ proxy against discrete extractions, and the fit is provisional at this bottle co
   0.941; lag-corrected 0.908, 0.843 to 0.974; down-cast only 0.837, 0.764 to 0.909) and by P45_06 (same SUNA,
   0.862 to 0.886). Cast 30's 79 m bottle is flagged: 12.8 uM where the SUNA reads about 17.4 uM in uniform water
   and station P3 at 80 m has 18.1, close to the same cast's 30 m bottle (12.4), so probably water from about 30 m.
+- **The gridded nitrate is the down-cast, and the down-cast lags in the nitracline.** step08 compares the two
+  legs at every 1 m bin (`nitrate_updown_uM`, flagged in `nitrate_hyst_flag` where they differ by more than
+  2 uM). On P45_07 1029 of 2480 assessed bins are flagged (41%), on P45_06 176 of 582 (30%), almost all in the
+  nitracline (about 8 to 40 dbar on P45_07's shelf casts). The slow casts are among the most flagged (P45_06
+  casts 07 and 05: 91% and 71%; P45_07 casts 01, 10, 14 and 09: 59 to 77%), but casts with an ordinary response
+  are flagged too wherever the nitracline is sharp (P45_07 cast 12: 74%): with a 1 uM per metre gradient and the
+  package at 0.5 to 1 m/s, a 6 s response already puts the legs several uM apart. Where nitrate rises with depth
+  and the lag is first-order, a flagged bin's down-cast value reads low by about half the difference; where water
+  was held in the optical path (P45_07 cast 14) the split is unknown. The bottles are the nitracline of record.
 - **Onboard nitrate, not re-derived.** The onboard nitrate was computed with `SNA2503E.cal`, which is
   not currently in hand. The bottle correction absorbs the mean temperature and salinity bias, so the
   corrected product is usable, but a physics-based Sakamoto TCSS re-derivation is deferred until that
