@@ -8,7 +8,7 @@ could not set right when deck time dominated the file (P45_06, P45_07 file A0000
 
 Per cast, with times on each instrument's own clock (SUNA minus CTD, so a positive offset means the SUNA stamps late):
   water level   median peak (and abs254) of the SUNA frames well inside the cast: the CTD's wet interval minus
-                inner_margin_s at each end
+                inner_margin_s at each end, and away from any surface break (spectral_qc.ctd_wet_intervals)
   water-like    a frame within the step01 tolerance of that level: peak at least (1 - frac) of it, abs254 at
                 most tol above it (suncat.nitrate.spectral_qc uses the same numbers)
   stable water  the first water-like frame, within search_s of the CTD's entry, after which at least min_good of
@@ -61,7 +61,7 @@ def _water_like(peak, a254, wpk, wab, frac=FRAC, tol=TOL):
 
 def cast_events(t, peak, a254, t_in, t_out, t_first, t_last, search_s=SEARCH_S, inner_margin_s=INNER_MARGIN_S,
                 frac=FRAC, tol=TOL, depart_frac=DEPART_FRAC, run=RUN, min_good=MIN_GOOD, min_dry_s=MIN_DRY_S,
-                contact_max_s=CONTACT_MAX_S, max_gap_s=MAX_GAP_S, deck_window=(60.0, 20.0)) -> dict:
+                contact_max_s=CONTACT_MAX_S, max_gap_s=MAX_GAP_S, deck_window=(60.0, 20.0), breaks=()) -> dict:
     """Entry (stable water, the clock estimate; first change, contact_*) and exit of one cast. t, peak, a254: the SUNA frames (epoch s, sorted);
     t_in, t_out: the CTD's first and last wet scan; t_first, t_last: the CTD record's ends. Offsets in s, SUNA minus
     CTD; lo/hi bracket each event. note says why an event is missing."""
@@ -71,6 +71,8 @@ def cast_events(t, peak, a254, t_in, t_out, t_first, t_last, search_s=SEARCH_S, 
     t, peak = np.asarray(t, float), np.asarray(peak, float)
     a = None if a254 is None else np.asarray(a254, float)
     inner = (t >= t_in + inner_margin_s) & (t <= t_out - inner_margin_s) & np.isfinite(peak)
+    for b0, b1 in breaks or ():                     # the package back at the surface inside the cast (spectral_qc)
+        inner &= ~((t >= b0 - inner_margin_s) & (t <= b1 + inner_margin_s))
     if inner.sum() < 10:
         out["note"] = f"fewer than 10 SUNA frames more than {inner_margin_s:g} s inside the cast: no water level"
         return out
@@ -129,8 +131,10 @@ def entry_table(frames: pd.DataFrame, intervals: pd.DataFrame, **kw) -> pd.DataF
     a = f["abs254"].to_numpy(float) if "abs254" in f else None
     rows = []
     for _, r in intervals.iterrows():
+        br = r.get("breaks", ())
         e = cast_events(f["t"].to_numpy(float), f["peak_counts"].to_numpy(float), a, r["t_in"], r["t_out"],
-                        r.get("t_first", -np.inf), r.get("t_last", np.inf), **kw)
+                        r.get("t_first", -np.inf), r.get("t_last", np.inf),
+                        breaks=br if isinstance(br, (list, tuple)) else (), **kw)
         rows.append(dict(cast=r["cast"], **e))
     return pd.DataFrame(rows)
 

@@ -105,3 +105,18 @@ def test_step04_runs_on_the_example_cruise(tmp_path):
         assert r.returncode == 0, f"{nb}:\n" + r.stdout[-3000:] + r.stderr[-3000:]
     ev = pd.read_csv(tmp_path / "cruises" / "_EXAMPLE" / "_audit" / "suna" / "time_lag" / "_EXAMPLE__suna_clock_events.csv")
     assert len(ev) == 3 and ev["entry_offset_s"].isna().all() and ev["note"].str.contains("starts wet").all()
+
+
+def test_a_surface_break_is_kept_out_of_the_water_level():
+    """P45_07 cast 20: back at the surface for 2.5 min inside the CTD's wet interval. Without the break the deck
+    frames (38,000) would be over half the frames the water level is taken from."""
+    d = _cast(deck=38000)
+    brk = (d["t"] > T_IN + 100) & (d["t"] < T_IN + 420)
+    d.loc[brk, "peak_counts"] = 38000.0
+    br = [(T_IN + 84, T_IN + 404)]                                # CTD times (the SUNA stamps 16 s late here)
+    iv = IV.copy(); iv["breaks"] = pd.Series([br], dtype=object)
+    e = W.entry_table(d, iv).iloc[0]
+    assert e["water_peak"] == pytest.approx(45000, rel=0.01)
+    assert e["stable_lo"] < 16 <= e["stable_hi"]
+    bad = W.entry_table(d, IV).iloc[0]
+    assert bad["water_peak"] < 40000                              # the deck state took over the median

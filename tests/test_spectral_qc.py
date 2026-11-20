@@ -136,3 +136,71 @@ def test_offcast_frames_are_not_clean_and_not_out_of_water():
     out, _, _ = Q.qc_frames(df, spec, WL, Q.QCConfig(), inc | True, off)
     assert out.loc[100:119, "f_offcast"].all() and not out.loc[100:119, "L1_clean"].any()
     assert not out.loc[100:119, "f_outofwater"].any()              # the optical flag is untouched
+
+
+def _cnv_break(path, start="Apr 16 2026 11:00:00", n=2400):
+    """0.25 s scans; conductivity wet from scan 240 to 2160 throughout, but the package back at the surface
+    (pressure 0.0) from scan 600 to 1200 (150 s): P45_07 cast 20's shape."""
+    i = np.arange(n); t = i * 0.25
+    wet = (i >= 240) & (i < 2160)
+    p = np.where(wet, 20.0, 0.1); p[(i >= 600) & (i < 1200)] = 0.0
+    cols = [("timeS", t), ("prdM", p), ("c0S/m", np.where(wet, 5.0, 0.002))]
+    head = [f"# name {k} = {c}: {c}" for k, (c, _) in enumerate(cols)]
+    body = [" ".join(f"{v:.4f}" for v in row) for row in zip(*[v for _, v in cols])]
+    Path(path).write_text("\n".join([f"# start_time = {start} [Instrument's time stamp, header]", *head, "*END*", *body]))
+
+
+def test_a_surface_break_inside_the_wet_interval_is_listed_and_left_out(tmp_path):
+    _cnv_break(tmp_path / "ZZ_CTD_20.cnv")
+    _cnv(tmp_path / "ZZ_CTD_19.cnv", start="Apr 16 2026 12:00:00")
+    iv, _ = Q.ctd_wet_intervals(sorted(tmp_path.glob("*.cnv")))
+    r = iv.set_index("cast")
+    t0 = (pd.Timestamp("2026-04-16 11:00:00") - pd.Timestamp("1970-01-01")).total_seconds()
+    assert r.loc["ZZ_CTD_20", "t_in"] == pytest.approx(t0 + 60) and r.loc["ZZ_CTD_20", "t_out"] == pytest.approx(t0 + 539.75)
+    (a, b), = r.loc["ZZ_CTD_20", "breaks"]
+    assert a == pytest.approx(t0 + 150) and b == pytest.approx(t0 + 299.75)
+    assert r.loc["ZZ_CTD_19", "breaks"] == []
+    t = t0 + np.array([130, 200, 320, 400, 470])
+    assert Q.in_cast(t, iv, 30.0).tolist() == [False, False, False, True, True]  # 130 and 320: within 30 s of the break
+    assert Q.in_cast(t, iv.drop(columns="breaks"), 30.0).tolist() == [True, True, True, True, True]
+    assert Q.surface_breaks(np.arange(100.0), np.r_[np.full(50, 5.0), np.full(20, 0.1), np.full(30, 5.0)], 0, 99) == []
+
+
+def _two_casts(level2=0.85, n1=300, n2=200, seed=5):
+    """One file, two casts: cast A in seawater at peak ~45,000; cast B's seawater reads level2 x that (another
+    water mass, the lamp, the optical path), with a few deck-state frames (15 % darker than B's own level)."""
+    rng = np.random.default_rng(seed)
+    n = n1 + n2
+    lamp = np.exp(-((WL - 260.0) / 70.0) ** 2)
+    lvl = np.r_[np.ones(n1), np.full(n2, level2)]
+    deck = np.zeros(n, bool); deck[n1 + 50:n1 + 60] = True
+    lvl[deck] *= 0.85
+    spec = (45000 * lvl)[:, None] * lamp * (1 + rng.normal(0, 0.002, (n, WL.size)))
+    df = pd.DataFrame(dict(time_utc=pd.Timestamp("2026-08-03 08:00:00") + pd.to_timedelta(np.arange(n), unit="s"),
+                           nitrate_uM=1.0, abs254=np.where(deck, -0.35, -0.43) + rng.normal(0, 0.003, n),
+                           abs350=0.0, bromide=0.0, spec_avg=18500.0 * lvl + rng.normal(0, 40, n),
+                           dark=600.0, fit_rmse=2e-4, humidity=2.0))
+    cast_of = np.r_[np.full(n1, "A"), np.full(n2, "B")].astype(object)
+    return df, spec, deck, cast_of
+
+
+def test_a_cast_reading_darker_seawater_keeps_its_frames_with_its_own_window():
+    df, spec, deck, co = _two_casts()
+    inc = np.ones(len(df), bool)
+    file_only, _, _ = Q.qc_frames(df, spec, WL, Q.QCConfig(oow_per_cast=False), inc, None, co)
+    per_cast, win, info = Q.qc_frames(df, spec, WL, Q.QCConfig(), inc, None, co)
+    b = (co == "B") & ~deck
+    assert file_only.loc[b, "f_outofwater"].mean() > 0.9          # 15 % below the file's level: out of water
+    assert not per_cast.loc[b, "f_outofwater"].any()                # against its own level: in water
+    assert per_cast.loc[deck, "f_outofwater"].all()                 # B's deck frames are still caught
+    cw = {w["cast"]: w for w in info["cast_windows"]}
+    assert cw["A"]["source"] == cw["B"]["source"] == "cast"
+    assert cw["B"]["peak_counts_median"] / cw["B"]["peak_counts_file_median"] == pytest.approx(0.85, abs=0.03)
+    assert per_cast.loc[co == "A", "f_outofwater"].sum() == file_only.loc[co == "A", "f_outofwater"].sum()
+
+
+def test_a_cast_with_too_few_frames_keeps_the_file_window():
+    df, spec, deck, co = _two_casts(level2=1.0, n2=20)
+    df2, _, info = Q.qc_frames(df, spec, WL, Q.QCConfig(), np.ones(len(df), bool), None, co)
+    cw = {w["cast"]: w for w in info["cast_windows"]}
+    assert cw["A"]["source"] == "cast" and cw["B"]["source"] == "file" and cw["B"]["n"] == 20

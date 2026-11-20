@@ -87,6 +87,11 @@ proxy against discrete extractions, and the fit is provisional at this bottle co
   package at 0.5 to 1 m/s, a 6 s response already puts the legs several uM apart. Where nitrate rises with depth
   and the lag is first-order, a flagged bin's down-cast value reads low by about half the difference; where water
   was held in the optical path (P45_07 cast 14) the split is unknown. The bottles are the nitracline of record.
+- **Surface breaks and held water (an observation, three casts).** step01 finds three casts where the package
+  came back to the surface for 151 to 202 s inside the CTD's wet interval: P45_07 casts 14 and 20, P45_06 cast 07.
+  Two of them are among the three casts whose SUNA behaved as if water was held in its optical path (P45_07 cast
+  14; P45_06 cast 07, with cast 05 the third, which had no break), and cast 20 was not. Taking the SUNA out of the
+  water and back in mid-cast could leave air or surface water in the open path, but three casts cannot show that.
 - **Onboard nitrate, not re-derived.** The onboard nitrate was computed with `SNA2503E.cal`, which is
   not currently in hand. The bottle correction absorbs the mean temperature and salinity bias, so the
   corrected product is usable, but a physics-based Sakamoto TCSS re-derivation is deferred until that
