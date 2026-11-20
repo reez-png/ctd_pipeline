@@ -30,6 +30,26 @@ P45_07 (inspect_gate_losses, Nov 2026):
               about half to two-thirds of the deck-to-seawater separation.
 A window from the file's own frames or the fixed fallback stays two-sided, as before.
 
+Two refinements (Nov 2026):
+  surface breaks  a CTD's conductivity cell stays full out of the water, so its wet interval runs from the first
+                  to the last wet scan even when the package comes back to the surface between the soak and the
+                  profile. P45_07 cast 20 sat at the surface for 194 s after its soak, and its deck-state frames
+                  were among those A0000030's window and reference were built from: leaving the break out took
+                  that set from 663 to 531 frames (the window's peak bound moved 0.3 %). Breaks found (Nov 2026):
+                  P45_07 casts 14 and 20, P45_06 cast 07.
+                  ctd_wet_intervals now lists each stretch of at least min_break_s with pressure below p_surface
+                  inside the wet interval (breaks), and in_cast leaves each out, with the same margin.
+  per-cast        a file can span many casts and days (P45_07's A0000027: two days), and the seawater level the
+  windows         window is built around can move between casts (water type, the lamp, the optical path). With
+                  oow_per_cast, the frames of a cast with at least oow_min_n_ctd in-cast frames are judged
+                  against a window built from that cast's own in-cast frames, by the same one-sided rule and
+                  minimum width; the other frames keep the file's window. The reference spectrum stays per file.
+                  How far each cast's seawater level sits from the file's is reported, so a cast whose own window
+                  rests on an unusual level is seen. In A0000027 casts 11 and 12 read 1 to 2 % above the file's
+                  seawater level and casts 13 and 14 read 9 and 4 % below it, and the darker, more variable
+                  frames of cast 13 had widened the file's window to 25 % below its median; each cast's own
+                  window restores the 10 % minimum width there (33 more frames flagged in casts 11, 12 and 14).
+
 Timing gives a second, separate flag, f_offcast: a frame more than margin_s away from every CTD wet interval was
 not taken during a cast (deck time, a deck test), whatever its optics. It is fatal (the frame has no CTD record
 to place it) but kept apart from f_outofwater, which stays purely optical so the water-entry check in step04
@@ -70,6 +90,7 @@ class QCConfig:
     fallback_specavg: tuple = (8000, 30000)
     oow_dark_frac: float = 0.10    # CTD-derived window: dark-side bound at least this far below the median (peak, spec_avg)
     oow_abs254_tol: float = 0.05   # CTD-derived window: abs254 bound at least this far above the median
+    oow_per_cast: bool = True      # a cast with enough in-cast frames gets its own window (needs cast_of)
     peak_hard: tuple = (2000, 60000)
     abs254_hard: tuple = (-5.0, 5.0)
     specavg_hard: tuple = (0.0, 60000)
@@ -95,11 +116,23 @@ def _start_time(path) -> datetime | None:
     return None
 
 
-def ctd_wet_intervals(paths, cond_in: float = 1.0, p_in: float = 1.0) -> tuple[pd.DataFrame, list]:
-    """(cast, t_in, t_out, by, t_first, t_last) per CTD .cnv, epoch seconds UTC: the first and last scan with
-    conductivity above
-    cond_in (1 separates air from seawater in S/m or mS/cm), or, in a file with no conductivity column, with
-    pressure above p_in dbar (by says which), and the record's first and last scan. Also returns [(file name, reason)] for files left out."""
+def surface_breaks(ts, p, i0: int, i1: int, p_surface: float = 0.5, min_break_s: float = 30.0) -> list:
+    """(start, end) elapsed times of each stretch of at least min_break_s, between scan indices i0 and i1, with
+    pressure below p_surface dbar: the package at or above the surface inside a wet interval."""
+    ts, p = np.asarray(ts, float)[i0:i1 + 1], np.asarray(p, float)[i0:i1 + 1]
+    low = np.isfinite(p) & (p < p_surface)
+    edges = np.flatnonzero(np.diff(np.r_[0, low.astype(int), 0]))
+    return [(float(ts[a]), float(ts[b - 1])) for a, b in zip(edges[::2], edges[1::2])
+            if ts[b - 1] - ts[a] >= min_break_s]
+
+
+def ctd_wet_intervals(paths, cond_in: float = 1.0, p_in: float = 1.0, p_surface: float = 0.5,
+                      min_break_s: float = 30.0) -> tuple[pd.DataFrame, list]:
+    """(cast, t_in, t_out, by, t_first, t_last, breaks) per CTD .cnv, epoch seconds UTC: the first and last scan
+    with conductivity above cond_in (1 separates air from seawater in S/m or mS/cm), or, in a file with no
+    conductivity column, with pressure above p_in dbar (by says which), and the record's first and last scan.
+    breaks: [(start, end)] of each surface break inside the wet interval (surface_breaks; empty without a pressure
+    column). Also returns [(file name, reason)] for files left out."""
     rows, skipped = [], []
     for p in sorted(Path(x) for x in paths):
         start = _start_time(p)
@@ -119,18 +152,25 @@ def ctd_wet_intervals(paths, cond_in: float = 1.0, p_in: float = 1.0) -> tuple[p
             skipped.append((p.name, "never wet")); continue
         t0 = (pd.Timestamp(start) - pd.Timestamp("1970-01-01")).total_seconds()
         ts = d[tcol].to_numpy(float)
+        br = ([(t0 + a, t0 + b) for a, b in surface_breaks(ts, d[pcol], wet[0], wet[-1], p_surface, min_break_s)]
+              if pcol else [])
         rows.append(dict(cast=p.stem, t_in=t0 + ts[wet[0]], t_out=t0 + ts[wet[-1]], by=by,
-                         t_first=t0 + float(np.nanmin(ts)), t_last=t0 + float(np.nanmax(ts))))
-    return pd.DataFrame(rows, columns=["cast", "t_in", "t_out", "by", "t_first", "t_last"]), skipped
+                         t_first=t0 + float(np.nanmin(ts)), t_last=t0 + float(np.nanmax(ts)), breaks=br))
+    return pd.DataFrame(rows, columns=["cast", "t_in", "t_out", "by", "t_first", "t_last", "breaks"]), skipped
 
 
 def in_cast(t_epoch, intervals: pd.DataFrame, margin_s: float = 60.0) -> np.ndarray:
-    """True where t lies inside a cast's wet interval shrunk by margin_s at each end."""
+    """True where t lies inside a cast's wet interval shrunk by margin_s at each end, and more than margin_s from
+    each of its surface breaks (the breaks column, when present)."""
     t = np.asarray(t_epoch, float)
     m = np.zeros(t.shape, bool)
     for a, b in zip(intervals["t_in"], intervals["t_out"]):
         if b - a > 2 * margin_s:
             m |= (t >= a + margin_s) & (t <= b - margin_s)
+    if "breaks" in intervals:
+        for br in intervals["breaks"]:
+            for a, b in (br if isinstance(br, (list, tuple)) else []):
+                m &= ~((t >= a - margin_s) & (t <= b + margin_s))
     return m
 
 
@@ -211,12 +251,15 @@ def derive_window(df: pd.DataFrame, good, cfg: QCConfig, incast=None) -> tuple[d
 
 
 def qc_frames(df: pd.DataFrame, spec: np.ndarray, wl: np.ndarray, cfg: QCConfig | None = None, incast=None,
-              offcast=None):
+              offcast=None, cast_of=None):
     """L0 integrity + L1 spectral QC for one file. incast (bool per frame, from in_cast) makes the reference
     spectrum and the out-of-water window come from frames taken while the CTD was in the water; None keeps the
     file's own population (the rule before Nov 2026). offcast (bool per frame, from off_cast) sets f_offcast;
-    None leaves it False. Returns (df with flags, window, info) where info holds window_source, window_n,
-    ref_source, ref_n and ref (the reference spectrum)."""
+    None leaves it False. cast_of (the cast each frame belongs to, '' between casts, from which_cast) with
+    cfg.oow_per_cast gives each cast with at least oow_min_n_ctd in-cast frames its own window. Returns (df with
+    flags, the file's window, info) where info holds window_source, window_n, ref_source, ref_n, ref (the reference
+    spectrum) and cast_windows (one dict per cast: cast, source "cast" or "file", n, the window, and the cast's
+    median peak, abs254 and spec_avg against the file's in-cast medians)."""
     cfg = cfg or QCConfig()
     if df.empty:
         return df, None, dict(window_source="none", window_n=0, ref_source="none", ref_n=0)
@@ -254,8 +297,33 @@ def qc_frames(df: pd.DataFrame, spec: np.ndarray, wl: np.ndarray, cfg: QCConfig 
     df["f_shape"] = df["shape_dev"] > cfg.shape_dev_hi
     good0 = ~df[OTHER_FATAL].any(axis=1).to_numpy()
     win, src, n = derive_window(df, good0, cfg, inc)
-    df["f_outofwater"] = ~(df["peak_counts"].between(*win["peak"]) & df["abs254"].between(*win["abs254"])
-                           & df["spec_avg"].between(*win["spec_avg"]))
+
+    def _inside(w, m):
+        return (df.loc[m, "peak_counts"].between(*w["peak"]) & df.loc[m, "abs254"].between(*w["abs254"])
+                & df.loc[m, "spec_avg"].between(*w["spec_avg"]))
+
+    allm = np.ones(len(df), bool)
+    ok = _inside(win, allm).to_numpy().copy()
+    cast_windows = []
+    if cast_of is not None and inc is not None:
+        co = np.asarray(cast_of, dtype=object)
+        base = good0 & inc
+        fmed = {q: float(np.median(df.loc[base, q])) if base.any() else np.nan
+                for q in ("peak_counts", "abs254", "spec_avg")}
+        for c in sorted(x for x in set(co) if x):
+            m = co == c
+            use = base & m
+            row = dict(cast=c, source="file", n=int(use.sum()), window=win)
+            for q in ("peak_counts", "abs254", "spec_avg"):
+                row[f"{q}_median"] = float(np.median(df.loc[use, q])) if use.any() else np.nan
+                row[f"{q}_file_median"] = fmed[q]
+            if cfg.oow_per_cast and src == "ctd" and use.sum() >= cfg.oow_min_n_ctd:
+                wc, _, _ = derive_window(df, use, cfg, use)
+                ok[m] = _inside(wc, m).to_numpy()
+                row.update(source="cast", window=wc)
+            cast_windows.append(row)
+    df["f_outofwater"] = ~ok
     df["f_offcast"] = np.zeros(len(df), bool) if offcast is None else np.asarray(offcast, bool)
     df["L1_clean"] = ~df[FATAL].any(axis=1)
-    return df, win, dict(window_source=src, window_n=n, ref_source=ref_src, ref_n=ref_n, ref=ref)
+    return df, win, dict(window_source=src, window_n=n, ref_source=ref_src, ref_n=ref_n, ref=ref,
+                         cast_windows=cast_windows)
