@@ -13,7 +13,12 @@ from November 2026 versions are calendar versions, `YYYY.M.D` (README, section 9
 - Homogeneous-layer SUNA calibration needs 3 clean frames on each leg (P45_06: gain 0.877 to 0.862).
 - step07 applies the chlorophyll calibration to every scan; its printed inference no longer reads the gain as a
   factory error (the ECO V2 sent Legacy counts the `.xmlcon` coefficients do not match).
-- step04's readable tables moved to `L3/CTD/profiles_readable`.
+- step04's readable tables moved to `L3/CTD/profiles_readable`; step04 plots the production nitrate and the
+  calibrated chlorophyll from step08's grid (it had plotted the cross-check nitrate), and its tables carry both.
+- step02 finds SUNA files whatever the case of `.csv` (none were found on a case-sensitive file system).
+- step08 counts the daylight-rule NPQ bins on casts without a PAR channel too.
+- `cruises/_EXAMPLE` runs the whole path after step01 (Derived files, bin-type headers, `suna_calibration.json`,
+  `stations.csv`), checked by `tests/test_example_cruise.py`; `station_coords.csv` retired for `stations.csv`.
 
 ### Added
 - step02b (SUNA response time and the lag-aware bottle test), SUNA step04 (clock lag), step08 (L3 gridding).

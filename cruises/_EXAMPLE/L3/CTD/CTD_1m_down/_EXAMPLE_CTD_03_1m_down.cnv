@@ -8,6 +8,9 @@
 # name 4 = sbeox0Mm/Kg: sbeox0Mm/Kg
 # name 5 = flECO-AFL: flECO-AFL
 # nvalues = 84
+# binavg_bintype = decibars
+# binavg_binsize = 1
+# binavg_excl_bad_scans = yes
 *END*
      2.0000     2.0000    28.0484    35.0322   201.2000     0.0757
      3.0000     3.0000    27.6071    35.0476   199.3000     0.0773

@@ -1,0 +1,4 @@
+cast_id,station,date_time_utc_start,lat_deg,lon_deg,position_source
+_EXAMPLE_CTD_01,E1,2026-04-20 10:00:00,5.4050,-0.1510,synthetic
+_EXAMPLE_CTD_02,E2,2026-04-20 13:00:00,5.4640,0.2930,synthetic
+_EXAMPLE_CTD_03,E3,2026-04-20 15:00:00,5.2410,-0.0670,synthetic

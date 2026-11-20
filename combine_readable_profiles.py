@@ -48,8 +48,8 @@ PREFERRED_ORDER = [
     "Temperature_C", "PotentialTemp_C",
     "Salinity_PSU", "SigmaT_kg_m3",
     "Oxygen_umol_kg", "Oxygen_umol_L",
-    "Fluorescence_mg_m3", "BeamAttenuation_1_m", "PAR",
-    "UTC_time", "Nitrate_uM",
+    "Fluorescence_mg_m3", "Chl_calibrated_mg_m3", "BeamAttenuation_1_m", "PAR",
+    "UTC_time", "Nitrate_corrected_uM", "Nitrate_downup_over_2uM", "Nitrate_raw_uM",
 ]
 
 

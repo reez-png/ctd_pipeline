@@ -359,15 +359,15 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
     lon = float(lon) if lon is not None and pd.notna(lon) else None
     out["chl_npq_risk"] = npq_risk(out["pressure_db"].to_numpy(), start, cfg, lon).to_numpy()
     # the same question answered by the light itself: the bin's PAR (SBE's bin average of the PAR sensor)
+    clk = pd.Series(out["chl_npq_risk"], dtype="boolean")
+    st.npq_bins_clock = int(clk.fillna(False).sum())     # counted with or without PAR (until Nov 2026: only with it)
     pc = next((k for k in out.columns if str(k).lower().startswith("par")), None)
     if pc is not None:
         par = pd.to_numeric(out[pc], errors="coerce").to_numpy(float)
         out["chl_npq_risk_par"] = pd.Series(np.where(np.isfinite(par), par >= cfg.npq_par, pd.NA),
                                             dtype="boolean").to_numpy()
-        clk = pd.Series(out["chl_npq_risk"], dtype="boolean")
         pr = pd.Series(out["chl_npq_risk_par"], dtype="boolean")
         both = clk.notna() & pr.notna()
-        st.npq_bins_clock = int(clk.fillna(False).sum())
         st.npq_bins_par = int(pr.fillna(False).sum())
         st.npq_bins_both_known = int(both.sum())
         st.npq_bins_agree = int((clk[both] == pr[both]).sum())
