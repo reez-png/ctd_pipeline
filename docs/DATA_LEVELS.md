@@ -61,18 +61,14 @@ Bold marks a folder that moves. `v1` is the layout the pipeline was built on; `v
 | `profile_tables` (`<cast>_readable.csv`) | L2/CTD/profile_tables | **L3/CTD/profiles_readable** | step04_plot_profiles | people |
 | `profiles_table` (`combined_all_casts_*.csv`) | L2/CTD | **L3/CTD** | combine_readable_profiles | people |
 
-## Findings from the inventory (to resolve in phase 4)
+## Findings from the inventory, and where they stand (Nov 2026)
 
-- **Which nitrate feeds the figures.** The README names `step03_nitrate_qc` as the production nitrate and
-  `step03_suna_bottle_calibration` as a cross-check, but `step04_plot_profiles` and `step06` read the
-  cross-check product (`suna_calibrated`), and nothing downstream reads `nitrate_qc`. The L3 grid should take
-  its nitrate from the production product, and the plots should then read the L3 grid.
-- **chl-a is calibrated on 1 m bins today.** `step07` fits and applies the bottle calibration on the 1 m
-  down-cast grid, so `chl_calibrated` is binned, not native resolution. Until phase 4 applies the fit at
-  native resolution and grids afterwards, `L2/productivity` will hold a binned product. The fit itself does
-  not need to change.
-- **`step05_productivity_calibration.ipynb`** writes to the same folder as `step07_productivity_calibration`
-  and appears to be an earlier copy. Confirm it is retired so two notebooks cannot overwrite one product.
+- **Which nitrate feeds the products.** Resolved for the grid: step08 grids the production nitrate
+  (`nitrate_qc`, from `step03_nitrate_qc`) and step06 reads step08's grid. Still open for `step04_plot_profiles`,
+  which plots the cross-check product (`suna_calibrated`), binned by rounding pressure onto depth.
+- **chl-a was calibrated on 1 m bins.** Resolved: `step07` fits through medians of 1 m cells but applies the
+  calibration to every scan, so `L2/productivity` is at native resolution, and step08 grids it.
+- **`step05_productivity_calibration.ipynb`**, an earlier copy of step07 writing to the same folder, is retired.
 
 ## Migration, in phases
 
@@ -91,6 +87,9 @@ Each phase is its own pull request and keeps the regression baseline green unles
    table per cast), step07 applying its calibration at native resolution, and the nitrate source above. These
    change products on purpose; the baseline reports exactly what moved, for review before re-freezing.
 5. **Documentation.** README level table and folder tree, `PROCESSING_PARAMETERS.md`, and the slide.
+
+Phases 1 to 4 are done (`ACTIVE_LAYOUT = "v2"`); phase 5 is the README, `VALIDATION.md` and
+`PROCESSING_PARAMETERS.md` revision of Nov 2026.
 
 ## Migrating a cruise
 

@@ -1,658 +1,404 @@
-# SUNCAT — SUNA–CTD Analysis Toolkit
+# SUNCAT: SUNA and CTD Analysis Toolkit
 
 ![tests](https://github.com/reez-png/ctd_pipeline/actions/workflows/tests.yml/badge.svg)
 
-**SUNCAT** (Sun-Cat ☀️, *SUNA–CTD Analysis Toolkit*) is the cruise-centric processing of Sea-Bird CTD
-casts and rosette-mounted SUNA nitrate for the Ocean Margins Initiative (OMI), following the June 2026
-OMI specification (Marrec / Lucas) and the SUNA quality-control method of Zheng et al. (2024).
+**SUNCAT** is the cruise-centric processing of Sea-Bird CTD casts and a rosette-mounted SUNA nitrate sensor for
+the Ocean Margins Initiative (OMI) on the Ghana shelf. It follows the June 2026 OMI specification (Marrec, Lucas),
+the SUNA quality control of Zheng et al. (2024), and a data-level scheme agreed in November 2026: calibrate and
+flag at native resolution (L2), then grid once (L3).
 
-This repository is two things in one place:
+The repository holds two things:
 
-- an installable Python package, **`suncat`**, holding the tested, reusable core (readers, sectioning,
-  seawater science, and the Sea-Bird backend); and
-- the cruise **notebooks and scripts** (step01 to step07, the step00 QC layer, the SUNA QA layer) that
-  import that core to turn raw instrument files into a quality-controlled nitrate product, organised by
-  cruise under an `L0 → L1 → L2 → L3` data-level scheme.
+- **`suncat`**, an installable Python package (`src/suncat/`) with the tested core: readers, sectioning, seawater
+  functions, SUNA spectral QC, bottle pairing, response and calibration fits, gridding, and an optional
+  Windows-only backend that drives SBE Data Processing.
+- **The cruise notebooks and scripts** (`processing_scripts/notebook/`, `tools/`) that use it to turn raw
+  instrument files into calibrated, flagged products, organised by cruise under L0 to L3.
 
----
+Built on, and checked against, two cruises: P45_06 (April 2026, 11 casts) and P45_07 (31 casts). What the pipeline
+recovers on them, and what it cannot yet settle, is in [`docs/VALIDATION.md`](docs/VALIDATION.md).
 
-## The `suncat` package
-
-The reusable core is an editable-installable package under `src/suncat/`. It is split in two so the
-science is portable and the Windows-only Sea-Bird dependency is isolated:
-
-- a **portable core** that operates on already-produced `.cnv` and L2/L3 products and installs anywhere:
-  - `suncat.io.cnv` — the canonical Sea-Bird `.cnv` reader (`read_cnv`, `read_cnv_full`), one
-    implementation replacing the copies that used to live in each step00 notebook; it also carries the
-    header sampling interval / rate on `df.attrs`.
-  - `suncat.section` — motion-based descent-onset / sectioning (`descent_start`).
-  - `suncat.calc` — seawater science: `salinity` (PSS-78), `thermo` (potential temperature),
-    `depth` (pressure→depth), and `binning` (`bin_mean`).
-  - `suncat.util` — small shared helpers (`pick`, the column-name resolver).
-  - `suncat.config`, `suncat.baseline` — path/cruise configuration and the regression-baseline support.
-- an **optional, Windows-only backend**, `suncat.sbe`, that drives the proprietary SBE Data Processing
-  executables (`run_module`). The portable core never imports it.
-
-`ctd_lib.py` is kept as a thin compatibility shim: it re-exports the seawater functions from
-`suncat.calc` and delegates its descent walk-back to `suncat.section`, so every existing
-`from ctd_lib import …` in the scripts and notebooks keeps working unchanged. The remaining modules
-(`io.suna`, `io.bottles`, `io.write`, `qc`, `nitrate`, `productivity`, `sections`, `viz`, `sbe.psa`)
-are scaffolded and will be filled as the notebooks are migrated.
-
-Each extraction is covered by tests and was verified to change the pipeline's numbers by nothing.
-`pytest -q` runs the suite locally; GitHub Actions runs it on Python 3.10–3.12 on every push. A
-regression baseline (`tools/make_baseline.py`, `tests/baseline/`) freezes the current L3 products on
-your machine so a refactor that moves a number is caught before it reaches data; those frozen products
-are git-ignored and never enter the public repo.
+Contents: [instruments](#1-the-instruments-it-is-built-for) ·
+[install](#2-install) · [data levels](#3-data-levels-and-layout) · [running a cruise](#4-running-a-cruise) ·
+[the steps](#5-the-steps) · [results and findings](#6-results-and-findings) ·
+[other instruments](#7-adapting-it-to-another-ctd-or-sensor-suite) · [tools](#8-helper-tools) ·
+[tests](#9-tests-baseline-and-ci) · [known gaps](#10-known-gaps-and-planned-work) · [references](#references)
 
 ---
 
-## Quickstart
+## 1. The instruments it is built for
 
-Clone and install, then run the synthetic example end to end, no cruise data required:
+One instrument suite, the same on P45_06 and P45_07, under one configuration file (`19-8460.xmlcon`):
+
+| Instrument | Serial | Calibration | Reaches the pipeline as |
+|---|---|---|---|
+| Sea-Bird SBE 19plus V2 SeaCAT, profiling mode, 4 Hz, strain-gauge pressure | 8460 | temperature and conductivity 3 Aug 2025; pressure 4 Sep 2025 | `tv290C`, `c0S/m`, `prdM` |
+| Sea-Bird SBE 43 dissolved oxygen | 4704 | 8 Jul 2025 | `sbeox0V`, `sbeox0Mm/L`, `sbox0Mm/Kg` |
+| Satlantic log PAR | 2419 | 28 Jul 2025 | `par/sat/log` |
+| WET Labs C-Star transmissometer, 25 cm path | 2655 | 10 Sep 2025 | `CStarAt0` |
+| Sea-Bird ECO V2 (chlorophyll at 470 and 435 nm excitation, backscatter at 700 nm), on the CTD's RS-232 port | 10043 | characterization 8 Sep 2025 | `flECO-AFL` (470 nm chlorophyll); `flECO-AFL1` (most likely 435 nm, not used); backscatter not exported |
+| Sea-Bird SUNA V2 nitrate, open path, own logger and clock | 2503 | `SNA2503C.cal`; saltwater verification 20 Aug 2025 | raw SATSLF frames (`.CSV`), merged by time |
+| Sea-Bird SBE 55 ECO water sampler (Niskins) | not in the `.xmlcon` | | `.afm` auto-fire log per cast (P45_07 only) |
+
+Two facts about this suite shape the processing (details in
+[`docs/PROCESSING_PARAMETERS.md`](docs/PROCESSING_PARAMETERS.md)):
+
+- **The ECO V2 sent Legacy (ECO Classic) counts**, which saturate at 4130, while the `.xmlcon` holds the
+  characterization sheet's coefficients rather than the Legacy ones the sensor's `GetCC` reports. The bottle
+  calibration in step07 absorbs the difference; the `.cnv` fluorescence itself cannot be read as the factory scale.
+- **The SUNA logs on its own clock** and responds with a lag (a median response time of 7 s on P45_06, much
+  slower on a few casts).
+  Its frames are matched to the CTD by UTC time, its clock offset is measured, and its response is assessed per
+  cast before any bottle calibration.
+
+---
+
+## 2. Install
 
 ```bash
 git clone https://github.com/reez-png/ctd_pipeline.git
 cd ctd_pipeline
 python -m venv .venv
-.venv\Scripts\activate          # Windows (macOS/Linux: source .venv/bin/activate)
+.venv\Scripts\activate           # Windows (macOS/Linux: source .venv/bin/activate)
 pip install -r requirements.txt
-pip install -e .                # the suncat package (editable), so the notebooks can import it
-jupyter notebook
+pip install -e ".[dev]"          # the suncat package (editable) and pytest
+pytest -q
 ```
 
-In the notebooks set `CRUISE_ID = "_EXAMPLE"` and run, in order: `suna/step00_suna_inventory`,
-`suna/step01_suna_spectral_qc`, `step02_merge_ctd_suna`, `step03_nitrate_qc`, and
-`productivity/step07_productivity_calibration`. The expected numbers are in
-`cruises/_EXAMPLE/README_EXAMPLE.md` and `docs/VALIDATION.md`. step01 (Sea-Bird processing) is skipped
-for the example, which ships step01's outputs so you start at the merge. For your own cruise, copy
-`cruises/_TEMPLATE/` to `cruises/<CRUISE_ID>/`, drop your data in, and set `CRUISE_ID`; all paths
-resolve through `project_paths.py`.
+Developed on Python 3.14; CI runs the tests on 3.10 to 3.12. `requirements.txt` gives minimum versions,
+`requirements-lock.txt` the exact tested environment. The notebook kernel must be the environment `suncat` is
+installed in. step01 also needs Sea-Bird **SBE Data Processing** (Windows); everything after it is pure Python.
 
----
-
-## Data availability
-
-This repository contains the processing code only. The cruise measurements it operates on, the raw CTD
-(`.hex`), SUNA (`.csv`), the processed L0 to L3 products, the discrete nutrient, chlorophyll and oxygen
-tables, and the station coordinates, are not included and are excluded by `.gitignore`. They are part of
-the Ocean Margins Initiative (OMI) P45 cruise dataset and are available on reasonable request to the
-authors. The
-`cruises/_TEMPLATE/` skeleton and the `*_TEMPLATE.csv` files document the exact input format, so the
-pipeline can be run on any comparably formatted cruise.
-
----
-
-## Installation
+**Try it without cruise data.** `cruises/_EXAMPLE` runs the SUNA QA path (`suna/step00_suna_inventory`,
+`suna/step01_suna_spectral_qc`, `suna/step02_suna_colocation`, `suna/step03_suna_bottle_calibration`) and should
+recover its planted calibration; `tools/make_synthetic_cruise.py <root>` writes a cruise that runs step07, step08
+and step06. Expected numbers: [`docs/VALIDATION.md`](docs/VALIDATION.md) section 1. The calibration files must be
+reachable: either run from the repo, or copy `metadata/calibration/` next to `cruises/` under your data root.
 
 ```bash
-git clone https://github.com/reez-png/ctd_pipeline.git
-cd ctd_pipeline
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-# source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .                 # installs the suncat package in editable mode
+python tools/run_notebook.py processing_scripts/notebook/suna/step01_suna_spectral_qc.ipynb --set CRUISE_ID=_EXAMPLE
 ```
 
-Developed and tested on Python 3.14; the test suite also runs on Python 3.10 to 3.12 in CI.
-`requirements.txt` lists the minimum versions; `requirements-lock.txt` pins the exact tested environment
-for reproducing published results. The `suncat` package declares its own dependencies in
-`pyproject.toml` (`numpy`, `pandas`; optional extras `[viz]`, `[netcdf]`, `[dev]`).
+To keep data outside the repository, point the notebooks and scripts at a data root holding `cruises/` with the
+environment variable `CTD_PIPELINE_ROOT` (`suncat.config` and `tools/make_baseline.py` read `SUNCAT_CTD_ROOT`).
 
-For CTD processing (step01) you also need Sea-Bird **SBE Data Processing** installed (Windows); the
-pipeline calls its executables. Steps 02 to 07 are pure Python.
-
-To run the test suite: `pip install -e ".[dev]"` (adds `pytest`), then `pytest -q` from the project
-root. The notebook kernel must be the same environment the package is installed in, so `import suncat`
-resolves there.
-
-> **Data and PSAs are not included in this repository.** The `cruises/*/L0..L3/` folders, the discrete
-> sample tables (`bottle_nitrate/`, `chla/`, `winkler_oxygen/`, `station_coords.csv`) and the `psa/*.psa`
-> setup files are excluded via `.gitignore`: only code, docs, the shared calibration references, the small
-> config files (`suna_cast_map.csv`) and the `*_TEMPLATE.csv` input templates are tracked. To start a
-> cruise, copy `cruises/_TEMPLATE/` to `cruises/<CRUISE_ID>/`, create its `L0/CTD` and `L0/SUNA` folders,
-> and drop your data in (lay it out per `docs/CRUISE_DATA_COLLECTION.md`). Rebuild the PSAs in the Sea-Bird
-> GUI (or obtain the `psa/` folder directly from Reez). `01_datcnv_bottles.psa` is auto-generated by step01,
-> so it is never tracked. Because the PSAs are not in the repo, **`docs/PROCESSING_PARAMETERS.md` is the
-> tracked record of every parameter** (chain, per-module values, bottle mode, open decisions); keep it in
-> sync with any PSA change in the same commit. All steps resolve their paths through `project_paths.py`,
-> so the only per-cruise switch is `CRUISE_ID`.
+**Data availability.** This repository holds the processing code only. The cruise measurements (raw `.hex`, SUNA
+frames, L0 to L3 products, discrete nutrient, chlorophyll and oxygen tables, station positions) are excluded by
+`.gitignore`; they are part of the OMI P45 cruise dataset and available on reasonable request. The Sea-Bird PSA
+files are not tracked either; [`docs/PROCESSING_PARAMETERS.md`](docs/PROCESSING_PARAMETERS.md) is the tracked
+record of every processing parameter.
 
 ---
 
-## 1. What each level means
+## 3. Data levels and layout
 
-| Level | Contents | Binning |
-|-------|----------|---------|
-| **L0** | Raw `.hex` (CTD), `.afm` (bottle auto-fire, beside each `.hex`), and `.bin` / raw `.csv` (SUNA) | none |
-| **L1** | Readable **full-cast** `.cnv` (Data Conversion only) and SUNA `.csv` | **none** |
-| **L2** | All CTD post-processing + 1 m / 1 s binning, plus the merged CTD+SUNA product and bottle products | 1 m down, 1 s full |
-| **L3** | SUNA quality-controlled nitrate product, plus the productivity calibration products (calibrated chlorophyll; dissolved oxygen once Winkler data arrive) | — |
+| Level | Meaning | Resolution |
+|---|---|---|
+| **L0** | raw, as logged: CTD `.hex` (and `.afm`), SUNA frames | instrument |
+| **L1** | cleaned per cast: SBE stages DatCnv to Derive, the CTD 1 s time base, SUNA spectral-QC tables | native |
+| **L2** | merged, calibrated and flagged: CTD and SUNA on one time base, nitrate on the bottle scale, chlorophyll calibrated, flags carried, down and up legs identified | native |
+| **L3** | gridded: one table per cast on the SBE 1 dbar down-cast bins, plus the SBE bin files and readable tables | 1 dbar |
 
-The single most important rule: **Data Conversion writes to L1; everything after it writes to L2.**
-L1 is readable but unbinned.
-
----
-
-## 2. Folder layout
+Every folder is defined once, in `project_paths.py` (`PRODUCTS`, `product_dir()`), and pinned by
+`tests/test_layout.py`. The full map, and how a cruise was moved from the old layout, is in
+[`docs/DATA_LEVELS.md`](docs/DATA_LEVELS.md). Never build `L1`/`L2`/`L3` paths by hand in a step.
 
 ```text
-ctd_pipeline/
-├── pyproject.toml                      # suncat package metadata (name, version, deps, test config)
-├── src/suncat/                         # the installable toolkit (pip install -e .)
-│   ├── io/cnv.py                       # canonical Sea-Bird .cnv reader (read_cnv, read_cnv_full)
-│   ├── section.py                      # motion-based descent onset / sectioning (descent_start)
-│   ├── calc/{salinity,thermo,depth,binning}.py   # PSS-78 S, potential temp, depth, bin_mean
-│   ├── sbe/run.py                      # OPTIONAL Windows backend: run one SBE module (run_module)
-│   ├── util.py                         # pick (column-name resolver)
-│   ├── config.py  baseline.py          # cruise/path config; regression-baseline support
-│   └── io/ qc/ nitrate/ productivity/ sections/ viz/ sbe/psa.py   # scaffolded, filled as notebooks migrate
-├── tools/make_baseline.py              # freeze current L3 outputs as a regression baseline
-├── .github/workflows/tests.yml         # CI: install + pytest on Python 3.10–3.12
-├── psa/                                # Sea-Bird PSA setup files (LOCAL ONLY, not tracked; rebuild in the Sea-Bird GUI)
-│   ├── 01_datcnv.psa                   # REQUIRED — Data Conversion (profile: .cnv only)
-│   ├── 01_datcnv_bottles.psa           # AUTO-GENERATED when bottle mode is on (Create both + AFM)
-│   ├── 05_filter.psa                   # Filter: P 1.0 s (A); T + C 0.5 s (B)
-│   ├── 02_alignctd.psa                 # Align CTD: T +0.5 s, C 0 s, O2 +5 s
-│   ├── 04_celltm.psa                   # Cell Thermal Mass (alpha 0.03, 1/beta 7.0 — confirm w/ Drew)
-│   ├── 06a_loopedit_percentmean.psa    # Loop Edit — percent of mean speed, minV 0.10 (default)
-│   ├── 06b_loopedit_fixedmin.psa       # Loop Edit — fixed minimum velocity 0.10 (rough-weather alt)
-│   ├── 07_derive.psa                   # Derive (salinity, density, ...)
-│   ├── 08b_binavg_1m_down.psa          # Bin Average 1 m, downcast only (science)
-│   ├── 08d_binavg_1s_full.psa          # Bin Average 1 s, full cast (for SUNA merge)
-│   ├── 09_asciiout_semicolon.psa       # optional ASCII export
-│   └── 10_bottlesum.psa                # optional — Bottle Summary (.ros -> .btl), bottle mode only
-├── docs/                               # all prose docs (PROCESSING_PARAMETERS.md, CRUISE_DATA_COLLECTION.md, BOTTLE_FIRE_PROCESSING.md, README_bottle_columns.md, walkthroughs, decisions memo)
-├── project_paths.py                    # shared path/calibration resolver, imported by every step
-├── ctd_lib.py                          # compatibility shim: re-exports suncat.calc seawater + delegates descent to suncat.section; keeps the .cnv array reader + CRLF-safe Section writer
-├── ANALYSIS_WORKFLOW.md                # task-oriented workflow + FAQ (companion to this file)
-├── cnv_to_csv.py  build_bottle_nitrate_table.py  build_bottle_table.py
-├── verify_reproducibility.py  combine_readable_profiles.py  fix_psa_output_paths.py  step03_run_report.py
-├── metadata/                           # shared, cruise-independent references
-│   ├── calibration/                    # 19-8460.xmlcon (CTD), SNA2503C.cal (SUNA); the one home, resolver looks here first
-│   ├── cast_logs/
-│   └── processing_notes/
-├── processing_scripts/notebook/
-│   ├── step00a_filter_qa.ipynb             # QC: Filter dX/dt reduction per channel
-│   ├── step00b_qc_filter_loopedit.ipynb    # QC: Filter vs Loop Edit (flag maps, reductions)
-│   ├── step00c_align_qa.ipynb              # QC: Align advance sweep (interactive)
-│   ├── step00d_stage_change_audit.ipynb    # Audit: per-stage change + reproducibility vs step01 (+ _P45_07)
-│   ├── step00e_soak_comparison.ipynb       # surface soak vs no-soak near-surface quality
-│   ├── soak_quality_analysis.ipynb         # SBE-free soak metric (reads L1 cnv)
-│   ├── deployment_phases.py                # QC: pressure-vs-time soak/dip/true-descent phase diagnostic
-│   ├── step01_run_sbe_processing_v2.py     # CTD SBE processing (run this in PyCharm Community)
-│   ├── step02_merge_ctd_suna.ipynb
-│   ├── step03_nitrate_qc.ipynb
-│   ├── step04_plot_profiles.ipynb
-│   ├── step05_profile_diagnostics.ipynb
-│   ├── step06_hydrographic_sections.ipynb
-│   ├── suna/                               # SUNA QA front-end (Section 4d)
-│   │   ├── step00_suna_inventory.ipynb
-│   │   ├── step01_suna_spectral_qc.ipynb        # writes suna_L1_clean flags, consumed by step02
-│   │   ├── step02_suna_colocation.ipynb         # standalone co-location (feeds step03_suna)
-│   │   └── step03_suna_bottle_calibration.ipynb # interactive bottle-bias calibration inspector
-│   └── productivity/                       # step07 discrete calibration (Section 4)
-│       ├── step07_productivity_calibration.ipynb
-│       ├── step07_noremoval_productivity_calibration.ipynb
-│       └── step07_npq_comparison.ipynb
-├── tests/                              # pytest suite (suncat modules + ctd_lib, loop edit, bottle table)
-│   └── baseline/                       # frozen L3 reference products (LOCAL ONLY, git-ignored)
-├── _sbe_work/                          # short, space-free staging area for the Sea-Bird CLI (local)
-└── cruises/
-    ├── _TEMPLATE/                      # copy this to start a new cruise
-    │   ├── L0/CTD/  L0/SUNA/           # create for raw data (git-ignored, not shipped in the template)
-    │   └── metadata/
-    │       ├── suna_cast_map.csv                 # cast_id,suna_file
-    │       ├── station_coords_TEMPLATE.csv       # cast, lat, lon, section, order (step06)
-    │       ├── bottle_nitrate/bottle_nitrate_TEMPLATE.csv
-    │       ├── chla/chla_TEMPLATE.csv
-    │       └── winkler_oxygen/winkler_oxygen_TEMPLATE.csv
-    └── P45_06/                         # one folder per cruise (06 = Apr 2026, 07 = ...); data git-ignored
-        ├── Instrument_Calibration_Files/   # optional per-cruise cal; resolver falls back here if shared is absent
-        ├── L0/{CTD,SUNA}/              # *.hex (+ *.afm); raw SUNA *.csv (SATSLF) / *.bin
-        ├── L1/{CTD,SUNA}/              # *.cnv full cast (readable); SUNA *.csv + per-frame spectral-QC tables
-        ├── L2/
-        │   ├── CTD/{Filter,Align_CTD,Cell_tm,Section,Loop_Edit,Derived,CTD_1m_down,CTD_1s,Bottle,profile_plots}/
-        │   └── SUNA/                   # *_SUNA_1s.csv (merged CTD+SUNA @1s, carries suna_L1_clean)
-        ├── L3/                         # <cast>_nitrate_QC.csv; productivity/; productivity_noNPQ/; SUNA/ (bottle-corrected)
-        ├── metadata/
-        │   ├── suna_cast_map.csv            # cast_id -> SUNA file (tracked)
-        │   ├── station_coords.csv           # cast lat/lon + transect for step06 (data, git-ignored)
-        │   ├── bottle_nitrate/              # <CRUISE>_bottle_nitrate.csv (+ TEMPLATE); drives step03
-        │   ├── chla/                        # <CRUISE>_chla.csv for step07 (data, git-ignored)
-        │   └── winkler_oxygen/              # Winkler table for step07 (empty until P45_08)
-        └── _audit/{suna,productivity,productivity_noNPQ,productivity_compare}/  # logs + QC summaries
+cruises/<CRUISE_ID>/
+├── L0/CTD/                    *.hex (+ *.afm beside each, same name)
+├── L0/SUNA/                   raw SUNA frames
+├── L1/CTD/                    DatCnv *.cnv; Filter/ Align_CTD/ Cell_tm/ Section/ Loop_Edit/ Derived/ CTD_1s/
+├── L1/SUNA/                   per-frame spectral QC (suna_L1_clean)
+├── L2/SUNA/                   <cast>_SUNA_1s.csv (merged), <CRUISE>__suna_L2_colocated.csv
+├── L2/SUNA_calibrated/        step03_suna_bottle_calibration's corrected profiles (the cross-check)
+├── L2/nitrate/                <cast>_nitrate_QC.csv: the production nitrate (step03_nitrate_qc)
+├── L2/productivity/           calibrated chlorophyll, every scan (step07); productivity_noNPQ/ beside it
+├── L2/CTD/Bottle/             .btl (bottle mode)
+├── L3/CTD/CTD_1m_down/        SBE Bin Average, 1 dbar down-cast
+├── L3/CTD/profiles_readable/  <cast>_readable.csv (step04); combined_all_casts_*.csv in L3/CTD/
+├── L3/gridded/                <cast>_L3_1m_down.csv: CTD, nitrate and chlorophyll with their flags (step08)
+├── metadata/                  per-cruise settings and discrete samples (below)
+├── _audit/                    logs, QC tables, fit tables
+└── _figures/                  qc/ and profiles/ (figures are not data)
 ```
 
-> **Note:** `.ros` bottle files (raw bottle-fire scans) are written by Data Conversion beside the L1
-> `.cnv`; `Bottle Summary` reads them into `L2/CTD/Bottle/*.btl`. Both are produced only in bottle mode.
+All of `L0` to `L3`, `_audit` and `_figures` are git-ignored. Of `metadata/`, only `suna_cast_map.csv` and the
+`*_TEMPLATE.csv` files are tracked.
 
 ---
 
-## 3. The processing chain (step01)
+## 4. Running a cruise
 
-The Amala-approved linear chain, run per cast:
+Copy `cruises/_TEMPLATE/` to `cruises/<CRUISE_ID>/`, put the raw files in `L0/CTD` and `L0/SUNA` (see
+[`docs/CRUISE_DATA_COLLECTION.md`](docs/CRUISE_DATA_COLLECTION.md)), and run the steps in this order. Notebooks can
+be run from Jupyter or the command line:
+
+```bash
+python tools/run_notebook.py processing_scripts/notebook/step08_grid_l3.ipynb --set CRUISE_ID=P45_07
+```
+
+| # | Step | Writes | Then |
+|---|---|---|---|
+| 1 | `step01_run_sbe_processing_v2.py` (PyCharm; dry run first) | L1/CTD stages, L3/CTD/CTD_1m_down, L2/CTD/Bottle | |
+| 2 | `suna/step00_suna_inventory`, `suna/step01_suna_spectral_qc` | L1/SUNA flags | |
+| 3 | `step02_merge_ctd_suna`, `suna/step02_suna_colocation` | L2/SUNA | |
+| 4 | `suna/step04_suna_time_lag` | a proposed clock offset | if the SUNA clock is off: `tools/set_suna_time_offset.py`, rerun row 3 |
+| 5 | `suna/step02b_suna_response_correction` | response time per cast, bottle test | `tools/set_suna_slow_casts.py` |
+| 6 | `build_bottle_nitrate_table.py` (with `.btl`) or `build_bottle_table.py` (without) | `metadata/bottle_nitrate/` | |
+| 7 | `suna/step03_suna_bottle_calibration` | homogeneous-layer fit, L2/SUNA_calibrated | `tools/set_suna_calibration.py` (`fit` or `adopted`) |
+| 8 | `step03_nitrate_qc` | L2/nitrate | |
+| 9 | `productivity/step07_productivity_calibration` (and `_noremoval`, `_npq_comparison`) | L2/productivity | |
+| 10 | `tools/make_stations_table.py <CRUISE> --write` | `metadata/stations.csv` | |
+| 11 | `step08_grid_l3` | L3/gridded | |
+| 12 | `step04_plot_profiles`, `step05_profile_diagnostics`, `step06_hydrographic_sections`; `combine_readable_profiles.py` | figures, readable tables | |
+
+Per-cruise settings live in `cruises/<CRUISE_ID>/metadata/`, written by the tools rather than edited by hand, so a
+run command or a notebook default cannot change them silently:
+
+| File | Says | Written by | Read by |
+|---|---|---|---|
+| `suna_cast_map.csv` | which SUNA file belongs to which cast | you (or step02's proposal) | step02, step03 |
+| `suna_time_offsets.csv` | the SUNA clock offset, per cast | `tools/set_suna_time_offset.py` | step02 |
+| `suna_response.csv` | casts with a slow SUNA response | `tools/set_suna_slow_casts.py` | step02b, step06, step08 |
+| `suna_calibration.json` | the Stage 3 calibration: `fit` from this cruise's bottles, or `adopted` with its source | `tools/set_suna_calibration.py` | step03 (required) |
+| `stations.csv` (or `<CRUISE>_CTD_cast_summary.csv`) | each cast's start time and position | `tools/make_stations_table.py` | step06, step07, step08 (solar time) |
+| `bottle_nitrate/`, `chla/`, `winkler_oxygen/` | discrete samples (templates show the columns) | you, the bottle builders | step02b, step03, step07 |
+
+**Before the first run**
+
+- [ ] The PSAs in `psa/` (local, rebuilt in the Sea-Bird GUI): `01_datcnv`, `05_filter`, `02_alignctd`, `04_celltm`,
+      `06a_loopedit_percentmean` (and `06b`), `07_derive`, `08b_binavg_1m_down`, `08d_binavg_1s_full`; each with
+      blank input and output directories and name append (`fix_psa_output_paths.py`). The bottle PSA is generated.
+- [ ] `19-8460.xmlcon` and `SNA2503C.cal` in `metadata/calibration/` (or the cruise's `Instrument_Calibration_Files/`).
+- [ ] For bottle mode, each `.afm` beside its `.hex` with the same name, and `APPLY_BOTTLES` set for the cruise.
+- [ ] `suna_cast_map.csv` filled, and the bottle and chlorophyll tables in the template's columns.
+- [ ] step01 dry run first; the same `CRUISE_ID` in every step.
+
+---
+
+## 5. The steps
+
+### step01: Sea-Bird processing (L0 to L1, and the 1 dbar bins at L3)
 
 ```text
-DatCnv → Filter → Align CTD → Cell Thermal Mass → Section → Loop Edit → Derive → Bin Average
+DatCnv -> Filter -> Align CTD -> Cell Thermal Mass -> Section (Python) -> Loop Edit -> Derive -> Bin Average
 ```
 
-- **DatCnv** → readable full-cast `.cnv` in `L1/CTD/`.
-- **Filter** (before Align): pressure 1.0 s (Filter A); temperature and conductivity 0.5 s (Filter B).
-  The T and C low-pass reduces conductivity/salinity spiking ahead of Cell Thermal Mass and Loop Edit.
-- **Align CTD**: temperature **+0.5 s**, conductivity **0 s**, SBE 43 oxygen **+5 s** (19plus V2 row).
-- **Cell Thermal Mass**: conductivity cell thermal-mass correction (after Align).
-- **Section** (a **non-SBE Python step** inside step01): removes the leading surface soak +
-  equilibration dip and keeps downcast + upcast, so Loop Edit's running-maximum-pressure rule is not
-  poisoned by the dip. Downcast selection is deferred to Bin Average. The descent-onset logic is the one
-  shared implementation in `suncat.section.descent_start` (reached via `ctd_lib.descent_onset`).
-- **Loop Edit**: percent of mean speed (window 3 s, 20 %), minimum velocity **0.10 m/s**, surface soak
-  removal off. A fixed-minimum-velocity variant (`06b`) is kept for rough weather.
-- **Derive**: salinity, density, and derived variables.
-- **Bin Average**: 1 m depth bins, **downcast only** (science profiles) and 1 s time bins, full cast
-  (for SUNA matching).
+- **Filter** (before Align): pressure 1.0 s; temperature and conductivity 0.5 s.
+- **Align CTD**: temperature +0.5 s, conductivity 0 s, SBE 43 oxygen +5 s (provisional until Winkler data).
+- **Cell Thermal Mass**: alpha 0.03, 1/beta 7.0 (Sea-Bird defaults; an open decision).
+- **Section**, a Python step: removes the surface soak and the equilibration dip before Loop Edit, whose
+  running-maximum-pressure rule the dip would otherwise poison (`suncat.section.descent_start`).
+- **Loop Edit**: percent of mean speed (3 s window, 20%), minimum velocity 0.10 m/s.
+- **Bin Average**: 1 dbar pressure bins, down-cast only (science), and 1 s bins over the full cast (SUNA merge).
 
-Module gates (top of `step01_run_sbe_processing_v2.py`):
+Run it with `RUN_SBE_COMMANDS = False` first, check `_audit/01_psa_diagnostic.csv` (every PSA's `warnings` empty),
+then set it `True`. Each module has a timeout, and the work folder copes with read-only and locked files.
+**Bottle mode** (`APPLY_BOTTLES = True`, for casts with an `.afm`): Data Conversion writes `.cnv` and `.ros`,
+Bottle Summary writes `.btl`; a cast without an `.afm` falls back to the profile PSA. P45_06 has no `.afm` (its
+Niskins were fired on the move), so its bottle depths are the sample sheet's targets.
 
-```python
-APPLY_WILDEDIT = False   # not in the agreed chain
-APPLY_CELLTM   = True     # on (after Align)
-APPLY_FILTER   = True     # on (before Align)
-APPLY_SECTION  = True     # Python soak+dip removal before Loop Edit
-APPLY_BOTTLES  = False    # per cruise: True for cruises with .afm bottle files (see Section 3b)
-```
+Lessons from the build, so they are not reintroduced: Section must come before Loop Edit (the order is not
+interchangeable); the Section writer keeps the `.cnv` CRLF line endings byte for byte (LF-only makes SBE report
+"Header line length exceeds buffer length"); "Create both data and bottle file" is `CreateFile=2` in the PSA
+(`1` writes only the `.ros`); PSAs re-saved from the SBE GUI regain hardcoded output paths, so blank them again.
 
-> **step01 format:** use `step01_run_sbe_processing_v2.py` in PyCharm Community — a flat top-to-bottom
-> script; edit the settings block at the top and press Run (green ▶). step02 and step03 remain
-> notebooks (run them via `jupyter notebook` in the PyCharm terminal).
+### The SUNA path
 
-- **Inputs:** `L0/CTD/*.hex`, `Instrument_Calibration_Files/*.xmlcon`, PSA files in `psa/`
-- **Outputs:** `L1/CTD/*.cnv`, `L2/CTD/<process>/*.cnv`, audit logs in `_audit/`
-- **Safety:** start with `RUN_SBE_COMMANDS = False` (dry run, writes the command plan only), inspect
-  `_audit/01_psa_diagnostic.csv` (every PSA should have an empty `warnings` column) and
-  `_audit/02_sbe_processing_command_log.csv`, then set `True`.
-- **Robustness built in:** the work-folder cleanup clears read-only files and retries (and falls back
-  to a fresh timestamped work folder if a leftover is locked); each SBE module has a hard timeout
-  (`MODULE_TIMEOUT_SECONDS`, default 600 s) so a stuck module cannot hang the run. `STOP_ON_ERROR`
-  halts the batch at the first failure — set it `False` to process every cast and collect all failures
-  in `_audit/02_failed_sbe_processing_steps.csv`.
+- **step00 / step01 (SUNA QA).** Frame inventory and instrument health; then per-frame spectral QC: warm-up,
+  saturation, low signal, fit RMSE, humidity, an out-of-water gate built from each cast's own in-water frames, and
+  surface breaks (the package back above 0.5 dbar for 30 s or more inside the CTD's wet interval). Writes the
+  per-frame `suna_L1_clean` flag.
+- **step02 (merge) and step02_suna_colocation.** SUNA frames onto the CTD 1 s time base by UTC, with the clock
+  offset from `suna_time_offsets.csv`, refusing to interpolate across gaps; the co-located product gives every
+  frame a pressure, a cast and a leg.
+- **step04_suna_time_lag.** The SUNA-to-CTD lag by three methods, with confidence intervals, a drift test, and an
+  independent check from water entry and exit.
+- **step02b.** The SUNA's response time per cast from the disagreement between down- and up-cast (no bottles),
+  then whether lag-corrected profiles match the bottles well enough to calibrate from them.
+- **step03_suna_bottle_calibration.** The homogeneous-layer fit: only bottles where the down- and up-cast agree
+  within 2 uM (at least 3 clean frames on each leg), with leave-one-out, so the lag cannot enter the gain.
+- **step03_nitrate_qc** (production). Zheng et al. (2024): Stage 1 the onboard nitrate (the TSP re-derivation
+  is work in progress), Stage 3 the calibration stated in `suna_calibration.json`, Stage 4 the assessment against
+  bottles. Writes `L2/nitrate/<cast>_nitrate_QC.csv`, which step08 grids.
 
-### 3b. Bottle mode (cruises with an SBE auto-fire module)
+### step07: chlorophyll (and, when Winkler data exist, oxygen)
 
-For cruises where bottles were fired (each cast has an `.afm`), set `APPLY_BOTTLES = True`. Then step01:
+Fits `.cnv value = offset + gain x extracted chl-a` through bottles matched by depth (median of 1 m cells within
+2 m on the down-cast), and applies it to every scan. Near-surface daytime bottles (10 m or shallower, 07 to 17
+local solar time) are left out for quenching; the fit under a PAR rule (PAR at least 100 umol photons m-2 s-1 at
+the bottle) is printed beside it. Each scan carries `chl_above_cal` where the value exceeds the highest bottle in
+the fit. A fluorometer stuck at one value is treated as dead for that cast. `step07_noremoval` keeps the
+quenched points; `step07_npq_comparison` overlays both. The oxygen path is coded and dormant.
 
-1. Runs Data Conversion in **"Create both data and bottle file"** mode with scan-range source =
-   **Auto-Fire Module (.afm)**, using an auto-generated `01_datcnv_bottles.psa` (derived from
-   `01_datcnv.psa`; it self-heals if stale). This produces `<cast>.cnv` **and** `<cast>.ros`.
-2. Stages each cast's `.afm` beside its `.hex` in the work folder (matched by identical basename).
-3. **Per cast:** a cast with an `.afm` uses the bottle PSA; a cast **without** one automatically falls
-   back to the profile PSA (`.cnv` only) — so a mix of bottle and non-bottle casts runs cleanly.
-4. If `psa/10_bottlesum.psa` exists, runs **Bottle Summary** on each `.ros` → `L2/CTD/Bottle/<cast>.btl`.
-   If it is absent, step01 still produces `.cnv` + `.ros` and skips only the `.btl` (with a note).
+### step08: L3 gridding
 
-`APPLY_BOTTLES = False` (for a cruise without `.afm` files, e.g. P45_06, whose Niskins were fired on the move
-without the auto-fire log) leaves the profile chain completely unchanged.
+One table per cast on the SBE 1 dbar down-cast bins: the CTD's own bin averages unchanged, and the production
+nitrate and calibrated chlorophyll averaged onto the same bins from flagged-clean samples. Per bin it adds:
+- `nitrate_updown_uM` and `nitrate_hyst_flag`: down- and up-cast nitrate read at the bin centre from their own frames
+  (within 2.5 dbar, 3 frames a leg), flagged where they differ by more than 2 uM;
+- `chl_npq_risk` (daylight rule) and `chl_npq_risk_par` (PAR rule);
+- `chl_above_cal`;
+- the cast's SUNA response, with a per-cast summary in `_audit/gridding/`.
 
----
+### step04 to step06: figures and tables
 
-## 4. The core pipeline notebooks / scripts (step01 to step07), in order
+step04 profile figures and readable tables; step05 cline, DCM and mixed-layer diagnostics; step06 cross-shelf
+sections, with step08's nitrate and red ticks where the down/up check flags a bin.
 
-steps 01 to 03 run in sequence (each reads the previous stage's output); steps 04 to 06 are
-visualization/diagnostics after step02; step07 calibrates the discrete productivity parameters.
-`CRUISE_ID` must be the same in all of them.
+### The CTD QC layer (step00a to step00e)
 
-### step01 — Sea-Bird processing → L1 + L2
-The chain in Section 3. Also handles bottle mode (Section 3b).
-
-### step02 — CTD ↔ SUNA merge → L2/SUNA
-Interpolates the SUNA `.csv` onto the CTD `*_1s.cnv` time base (UTC), producing a 1 s product with
-CTD + SUNA columns. Handles SUNA clock offset and refuses to interpolate across data gaps. The merged
-product now carries the per-frame `suna_L1_clean` flag and the cleaned nitrate (`suna_nitrate_clean`)
-from the SUNA spectral QC (step01 SUNA, Section 4d), so downstream steps can drop spectrally bad frames.
-
-- **Inputs:** `L1/SUNA/*.csv`, `L2/CTD/CTD_1s/*_1s.cnv`, SUNA spectral-QC L1 tables (Section 4d)
-- **Output:** `L2/SUNA/<cast>_SUNA_1s.csv`
-
-> **Pairing CTD casts to SUNA files.** SUNA files carry the instrument's own sequential id (e.g.
-> `A0000010.CSV`), which does not match the CTD cast id. step02 resolves the pairing via
-> `cruises/<CRUISE_ID>/metadata/suna_cast_map.csv` (`cast_id,suna_file`), a filename fallback, or an
-> auto-proposed `suna_cast_map_PROPOSED.csv` from time overlap. Alignment within a paired cast is by
-> **UTC time** (`SUNA_CLOCK_OFFSET_S` corrects drift). The same map is used by step02 and step03.
-
-### step03 — SUNA nitrate QC → L3
-Applies the Zheng (2024) post-processing: (Stage 1) starting nitrate, (Stage 2) low-nitrate
-temperature residual, (Stage 3) cruise-specific bottle bias, (Stage 4) assessment vs bottles.
-
-Bottles are matched to SUNA frames by **depth** (median of clean frames within `MATCH_DEPTH_TOL_M`,
-default 2.0 m, across both downcast and upcast), not by a single cast-level timestamp. The earlier
-time-only match collapsed every bottle to the surface SUNA value and produced a spurious negative
-slope; the depth match recovers the real bottle bias (P45_06: gain 0.871, offset -1.097, R2 0.992).
-`APPLY_STAGE2_TEMP_RESIDUAL` defaults to `False` because the Stage-2 temperature fit is confounded with
-depth at low bottle count. Frames carry `depth_m` and the `suna_L1_clean` flag from step01 SUNA.
-
-- **Inputs:** `L2/SUNA/<cast>_SUNA_1s.csv`, raw `L1/SUNA/*.csv`, `metadata/calibration/SNA2503C.cal`,
-  and the **bottle nitrate table** (see `README_bottle_columns.md`)
-- **Output:** `L3/<cast>_nitrate_QC.csv` + assessment tables in `_audit/`
-
-### step04 — Profile plots + lab-friendly CSVs → L2/CTD/profile_plots
-Vertical profiles from the 1 m downcast CTD data and, where a cast has SUNA, the nitrate. The nitrate
-panel now plots the **corrected** nitrate (`nitrate_corr_uM`) read from the L3 QC product, labelled
-"Nitrate (corrected)", rather than the raw merged nitrate. Per-cast single-variable figures and
-per-variable multi-cast overlays, plus a lab-friendly `<cast>_readable.csv`, and an interactive cast
-explorer.
-
-### step05 — Profile diagnostics → L2/CTD/profile_plots + _audit
-Thermocline / halocline / pycnocline / oxycline, DCM, MLD (temperature and density criteria), and the
-nitracline (onset + max gradient), as annotated multi-panel figures with a per-cast `.txt` sidecar,
-plus an interactive cast explorer.
-
-### step06 — Hydrographic sections → L2/CTD/profile_plots + _audit
-Cross-shelf vertical sections: a variable (temperature, salinity, sigma-theta, oxygen, nitrate)
-contoured with along-track distance on the x axis and depth on the y, built from the 1 m downcast
-products (and the L3 nitrate product for nitrate sections). Reads the station coordinate table
-(cast to lat/lon) and a transect definition, and includes an interactive section explorer.
-
-### step07 — Productivity calibration (chlorophyll + oxygen) → L3/productivity + _audit/productivity
-Calibrates the in-situ WET Labs ECO fluorometer against **extracted (discrete) chlorophyll-a**, and
-provides a ready, dormant path for the SBE 43 dissolved oxygen against **Winkler** titrations once those
-arrive (P45_08). Sensor and bottle values are matched by depth (median of the downcast bin within
-`DEPTH_WIN`, default 2 m); the fit is `sensor = a + b * bottle`, so corrected = (sensor - a) / b, and the
-factory-to-true multiplier is 1 / gain. Reports offset, gain with 95 % CI, R2, Pearson r, and RMSE raw
-vs corrected. Surface daytime points suppressed by non-photochemical quenching (NPQ) are flagged
-(`depth <= NPQ_DEPTH`, default 10 m, between `DAY` hours 07 to 17) and excluded by default
-(`EXCLUDE_NPQ = True`). Includes an interactive calibration explorer and an inference-from-results
-section. P45_06 chlorophyll (11 casts): `sensor = -0.004 + 1.138 * chl`, factory over-reads ~14 %
-(multiplier 0.88), R2 0.669, RMSE 0.222 -> 0.187.
-
-Two siblings answer Pierre's NPQ question without touching the canonical step07:
-- **step07_noremoval** — identical fit with `EXCLUDE_NPQ = False` (NPQ-flagged surface points kept),
-  writing to `L3/productivity_noNPQ` and `_audit/productivity_noNPQ`. On P45_06 keeping the points
-  shifts the gain only ~4 % (1.138 -> 1.184), because only 2 of 8 flagged surface bottles have a
-  matching 1 m sensor bin.
-- **step07_npq_comparison** — computes both calibrations (A = NPQ removed, B = NPQ kept), overlays the
-  corrected profiles per cast (blue = A, orange = B, red squares = bottles, open squares = NPQ-flagged),
-  and writes the A-vs-B comparison table to `_audit/productivity_compare/`.
+Diagnostics beside the chain that never change production data: Filter effect (step00a), Filter and Loop Edit
+flag maps (step00b), Align advance sweeps (step00c), a stage-by-stage change audit that reproduces step01 to 0.0
+difference (step00d), and soak against no-soak near-surface quality (step00e, `soak_quality_analysis`).
 
 ---
 
-## 4b. Does it produce a CSV? Yes
+## 6. Results and findings
 
-| Notebook/script | Output file | Folder | Produced when |
-|-----------------|-------------|--------|---------------|
-| step01 | `<cast>_1m_down.cnv`, `<cast>_1s.cnv` (+`.ros`/`.btl` in bottle mode) | `L2/CTD/...` | `RUN_SBE_COMMANDS = True`, PSAs present |
-| step02 | `<cast>_SUNA_1s.csv` | `L2/SUNA/` | step01 produced the 1 s CNV |
-| step03 | `<cast>_nitrate_QC.csv` | `L3/` | step02 produced the merged file |
-| step04 | `<cast>__<var>.png`, `<cast>_readable.csv` | `L2/CTD/profile_plots/` | step01 (+ step03 for corrected nitrate) done |
-| step05 | `<cast>__annotated.png`, `<cast>_diagnostics.txt`, `profile_diagnostics.csv` | `profile_plots/` + `_audit/` | step01 (+ step02) done |
-| step06 | `<section>__<var>.png`, section grids | `profile_plots/` + `_audit/` | step01 (+ step03 for nitrate) done, station table present |
-| step07 | `<cast>_productivity.csv`, fit tables, scatter `.png` | `L3/productivity/` + `_audit/productivity/` | step01 + discrete chla/Winkler table present |
-| step07_noremoval | same as step07, NPQ kept | `L3/productivity_noNPQ/` + `_audit/productivity_noNPQ/` | as step07 |
-| step07_npq_comparison | `<cruise>__npq_comparison_table.csv`, overlay `.png` | `_audit/productivity_compare/` | as step07 |
-| `cnv_to_csv.py` (helper) | `<name>.csv` per `.cnv` | chosen output folder | run on demand |
+| | P45_06 | P45_07 |
+|---|---|---|
+| SUNA Stage 3 (`N_QC = (N - a0) / a1`) | fit: a1 0.886, a0 -0.59 (27 bottles) | adopted: a1 0.89, a0 -0.39 |
+| Chlorophyll (`.cnv value = offset + gain x chl-a`) | gain 1.123, offset -0.002, R2 0.67, n 15 | gain 0.515, offset +0.189, R2 0.95, n 18 |
+| Gridded nitrate bins with down and up more than 2 uM apart | 30% | 41% |
 
-`step03`'s `_nitrate_QC.csv` columns: `utc_time`, `temp_c`, `salinity`, `no3_onboard`, `no3_stage1`,
-`no3_stage2`, `no3_qc` (final). Without a bottle table, Stages 2–3 are skipped and `no3_qc` carries no
-bottle correction — fill the bottle table before relying on `no3_qc`.
+What the two cruises showed, each with its evidence in [`docs/VALIDATION.md`](docs/VALIDATION.md):
 
----
+- **The SUNA lags, and the down-cast is what is gridded.** Down- and up-casts differ by more than 2 uM in 30 to 41%
+  of assessed bins, almost all in the nitracline; on P45_07 the up-cast reads up to 16 uM higher, probably water held in the vertically
+  mounted SUNA's optical path. Bottles stay the nitracline of record, and P45_07's calibration is adopted from
+  the homogeneous layer, supported by lag-aware fits to 52 bottles.
+- **Three casts surfaced mid-cast** (151 to 202 s above 0.5 dbar), two of them among the three casts with held
+  water: an observation, not yet a cause.
+- **The SUNA's field gain (0.86 to 0.89) disagrees with its factory saltwater check (1.00).** Open.
+- **P45_06's bottle depths are targets**; the homogeneous-layer check shows that does not move its calibration.
+- **The ECO's chlorophyll gain differs 2.2-fold between cruises**, and P45_06's upper-layer bottles read low
+  against its deeper ones; the `.xmlcon` lacks the ECO's Legacy coefficients. P45_07 lost the ECO entirely from
+  cast 13 (both channels at 0 counts for 19 casts).
+- **The daylight and PAR rules for quenching** agree on 87 to 95% of bins, but move the bottle fits little; the
+  daylight rule is kept and both flags are carried.
 
-## 4c. QC and audit layer (step00a to step00e)
-
-Diagnostics that sit *beside* the L0 to L3 flow, not in it: they read step01's own stage outputs and
-judge the processing. None of them change production data; step01 stays the single source of truth that
-they reproduce. Run them when tuning or reviewing the chain, or to answer a reviewer. These notebooks now
-import the shared implementations from the `suncat` package (the `.cnv` reader `suncat.io.cnv`, the
-descent / sectioning `suncat.section`, the SBE runner `suncat.sbe.run`, `suncat.util.pick`, and
-`suncat.calc.binning.bin_mean`) instead of each carrying its own copy.
-
-- **step00a_filter_qa.py** — Filter QA. Per-channel reduction in scan-to-scan variability (the Filter
-  numbers in Section 5): conductivity ~46 %, pressure ~24 %, temperature ~0 %.
-- **step00b_qc_filter_loopedit.ipynb** — Filter and Loop Edit QC. Per-method / per-scope loop-edit flag
-  maps and filter reductions, keeping all scans including flagged. The Sea-Bird bad-flag sentinel
-  (-9.99e-29) is masked out of the statistics, while the loop-edit flag column itself is kept.
-- **step00c_align_qa.ipynb** — Align QA. Advance sweep with slide-style figures and an interactive
-  advance explorer (the basis for the "conductivity 0 s, oxygen +5 s" decisions in Section 5).
-- **step00d_stage_change_audit.ipynb** (+ `_P45_07`) — Stage-change audit, DatCnv to Bin Average. For
-  each stage: scans removed, how far each variable moved (RMS and normalised RMS), and spike reduction,
-  on two detail casts plus a fleet summary, with an interactive up/down profile explorer at every stage.
-  Includes a **reproducibility check**: it rebuilds the chain and confirms every physical stage from
-  DatCnv through Derive matches the stored production products exactly (maximum absolute difference 0.0),
-  with Section byte-for-byte identical to step01. Also records per-cast `soak_seconds`. Cruise-agnostic
-  (one `CRUISE_ID` switch); a P45_07 copy is included.
-- **step00e_soak_comparison.ipynb** — Surface soak vs no-soak near-surface quality. Compares soak and
-  no-soak cruises on the same variable in the top 10 dbar of the descent: between groups (Mann-Whitney),
-  within each cast top vs deep (Wilcoxon), and a within-cruise dose-response (Spearman of soak seconds
-  vs spiking), with an auto-generated observational verdict, a proposed minimum soak reconciled with the
-  Sea-Bird ~60 s guidance, an equilibration-tail estimate, and clean-vs-noisy reference profiles.
-  Outputs to `_audit/soak_comparison/`.
-- **soak_quality_analysis.ipynb** — a lighter, SBE-free soak metric that reads L1 `.cnv` directly
-  (per-cast soak seconds and near-surface spiking), for a quick look without rerunning the chain.
-
-Because the descent-onset logic now lives in exactly one place (`suncat.section.descent_start`, which
-step01's Section, `ctd_lib.descent_onset`, and the step00 notebooks all use), and the Sea-Bird bad-flag
-sentinel and the soak-time definition are likewise shared through `suncat`, the QC (step00b), audit
-(step00d) and soak (step00e) notebooks stay consistent with step01's Section by construction. step01
-remains the source of truth for the production products.
+The field practices these findings call for (clock synchronisation, holds at each bottle, the auto-fire log,
+SUNA mounting and flushing, ECO coefficients, monitoring every channel in real time) will be collected in a CTD
+operations guide, in preparation.
 
 ---
 
-## 4d. SUNA QA layer (SUNA-side front-end to step02 / step03)
+## 7. Adapting it to another CTD or sensor suite
 
-The SUNA analogue of the step00 CTD QC layer: it inspects the raw SATSLF frames and flags bad spectra
-before the nitrate QC trusts them. step01 SUNA writes the `suna_L1_clean` flag that step02 carries and
-step03 uses, so this layer is part of the nitrate path, not optional decoration.
+The pipeline is general where it reads data and specific where it was configured. To use it with other
+instruments:
 
-- **step00_suna_inventory.ipynb** — SUNA frame inventory and integrity: frame counts, time coverage, per
-  cast, header/cal consistency, and a health summary (warmup, saturation, humidity, lamp). A first look
-  that confirms a log is usable before any QC. Writes to `_audit/suna/`.
-- **step01_suna_spectral_qc.ipynb** — per-frame spectral QC. Flags warmup (< 60 s), saturated
-  (> 60000 counts), low signal (< 2000), high fit RMSE (> 1e-3), high humidity (> 10 %), an out-of-water
-  optical gate (spectrum peak, abs254 and spec_avg out of range), long-wave absorption and spectral
-  shape deviation. Emits the per-frame `suna_L1_clean` flag table that step02 merges (on P45_06, 89.2 %
-  of frames clean). Writes to `_audit/suna/`.
-- **step03_suna_bottle_calibration.ipynb** — an interactive SUNA bottle-bias calibration inspector that
-  complements step03's Stage 3: depth-matched SUNA vs bottle nitrate, offset + gain regression with the
-  same statistics as step07, and an interactive calibration explorer. On P45_06 it reproduces the
-  step03 bottle fit (SUNA = -1.12 + 0.879 * bottle, R2 0.992, RMSE 1.68 -> 0.50 uM).
-
-> `step02_suna_colocation` writes a single `L2/SUNA/<CRUISE>__suna_L2_colocated.csv` that the standalone
-> `step03_suna_bottle_calibration` reads; the same time-colocation fix is also folded into the production
-> `step02_merge_ctd_suna`. So there are two bottle-bias fits: the production one in `step03_nitrate_qc`
-> (matches on the merged frames; P45_06 gives offset -0.73, gain 0.849) and the standalone inspector
-> (reads the colocated file; P45_06 gives offset -1.12, gain 0.879). They agree within the small-n
-> uncertainty (7 to 10 bottles). **The L3 nitrate product written by `step03_nitrate_qc` is the production
-> number to report**; the standalone is a cross-check and explorer.
->
-> **Calibration file note.** The onboard nitrate was computed with `SNA2503E.cal`, which is not currently
-> in hand; `SNA2503C.cal` (in `metadata/calibration/`) is used only for the wavelength grid in the QC
-> stages, not to re-derive nitrate. The bottle correction absorbs the mean temperature and salinity bias,
-> so the corrected product is usable in the meantime. When `SNA2503E.cal` is retrieved, a Sakamoto TCSS
-> re-derivation can be inserted before the bottle step.
+1. **Another Sea-Bird CTD** (SBE 911plus, 25plus, another 19plus): step01 works unchanged; supply its `.xmlcon`
+   and rebuild the PSAs for its sensors (Align advances, Cell Thermal Mass and Filter differ by instrument; the
+   step00a to step00c notebooks help choose them). Record every value in `docs/PROCESSING_PARAMETERS.md`.
+2. **Column names.** Readers resolve pressure from `prdM`/`prDM`/`prSM` and a few variants, and PAR from any column
+   starting with `par`. Instrument-specific names are listed in each notebook's settings: step07's `TARGETS`
+   (`sensor_cols`, for example `flECO-AFL`, `wetCDOM`, `flC`; oxygen `sbeox0Mm/L`), step04's `CTD_VARIABLES` and
+   `LAB_RENAME`. Add your sensors' names there.
+3. **The 1 dbar grid.** step08 requires SBE Bin Average output in pressure bins (`binavg_bintype = decibars`).
+4. **A non-Sea-Bird CTD** cannot use step01. Its data can enter at L1 if converted to `.cnv`-style files with
+   the same column names and a Loop Edit `flag` column, and binned to 1 dbar with the bin-type header; the readers
+   in `suncat.io.cnv` define what is expected.
+5. **Another nitrate sensor or SUNA.** Put its `.cal` in `metadata/calibration/` and name it in the SUNA
+   notebooks' settings. The spectral QC thresholds (`QCConfig` in `suncat.nitrate.spectral_qc`) assume a SUNA V2's
+   256-channel spectra; check them on a few casts with step00 and step01 before trusting the flags.
+6. **No SUNA.** step01, step07, step08 (CTD and chlorophyll only) and step04 to step06 run without it.
+7. **Fluorometers.** If the ECO reports Legacy counts, enter its `GetCC` coefficients in the `.xmlcon`; either
+   way, step07's bottle calibration is what makes the chlorophyll quantitative.
+8. **Location and time.** Nothing assumes the Gulf of Guinea: daylight is local solar time from each cast's
+   longitude (`stations.csv`), and the synthetic cruises test the southern hemisphere, east longitudes and the
+   equator.
 
 ---
 
-## 5. Decisions (resolved this cycle)
+## 8. Helper tools
 
-These were open in v1 and are now settled for the Gulf of Guinea shelf work:
-
-1. **Filter** — ON, before Align (P 1.0 s; T + C 0.5 s). Measured effect on the P45_06 casts:
-   conductivity dX/dt std reduced 33–54 % (mean 46 %), pressure 12–34 % (mean 24 %), temperature ~0 %.
-2. **Cell Thermal Mass** — ON, after Align (`APPLY_CELLTM = True`, `04_celltm.psa`). Coefficients
-   `alpha 0.03 / (1/beta) 7.0` are the SBE defaults; **confirm with Drew** (some groups use 0.04 / 8.0).
-3. **Section before Loop Edit** — added, because our staged equilibration dip made Loop Edit over-flag
-   (34–81 % on the full cast). Removing the leading soak + dip first drops that to a few percent.
-4. **Align advances** — temperature +0.5 s (fixed); conductivity **0 s** (the swept optimum was
-   marginal and inconsistent across casts, so no residual advance); oxygen +5 s (mid-range, pending
-   bottle-O2 calibration). SBE 43 **Tau correction OFF**, hysteresis ON.
-5. **Loop Edit minimum velocity** — lowered 0.25 → **0.10 m/s** for the slow shelf descents.
-6. **Wild Edit / despiking** — left OUT of the chain; the T + C low-pass Filter handles the spiking that
-   matters for salinity. Revisit only if a specific cast needs it.
-
----
-
-## 5b. Running in PyCharm Community Edition
-
-1. **Open the project** at the top level: `ctd_pipeline` (e.g. `C:\Projects\ctd_pipeline`).
-2. **Create the virtual environment:** Settings → Project → Python Interpreter → Add → Virtualenv →
-   New, location `ctd_pipeline/.venv`, base Python 3.10/3.11 (3.12+ also fine).
-3. **Install packages** in the PyCharm terminal (prompt shows `(.venv)`): `pip install -r requirements.txt`
-   then `pip install -e .` (the `suncat` package, so the notebooks can `import suncat`).
-4. **Run step01:** open `step01_run_sbe_processing_v2.py`, edit the settings block
-   (`CRUISE_ID`, `SBE_BIN_DIR`, `APPLY_BOTTLES`, `RUN_SBE_COMMANDS = False` for the dry run), press Run.
-5. **Run the notebooks (step02 / step03 / step04 / step05 / step06 / step07, and the SUNA QA
-   step00_suna / step01_suna):** in the terminal run `jupyter notebook`, open the `.ipynb` in the
-   browser, and run the cells there. The interactive explorers in step04 to step07 need `ipywidgets`
-   (and `ipympl` for live zoom); they degrade gracefully to static figures if those are absent. The
-   notebook's kernel must be the environment where `suncat` is installed, so `import suncat` resolves.
+| Script | What it does |
+|---|---|
+| `tools/run_notebook.py` | Runs a notebook from the command line with settings overridden (`--set NAME=value`), optionally at another git revision; never writes outputs into the repo |
+| `tools/set_suna_time_offset.py`, `set_suna_slow_casts.py`, `set_suna_calibration.py` | Write (or `--show`) the per-cruise SUNA settings in section 4 |
+| `tools/make_stations_table.py` | `stations.csv` from the `.cnv` NMEA header fixes, else the nutrient file through the pairing audit |
+| `tools/estimate_response_time.py` | A sensor's response time per cast from its own profiles (SUNA or chlorophyll) |
+| `tools/diagnose_suna_lag.py` | The SUNA's clock, kind of response and bottle match in one run |
+| `tools/compare_match_estimators.py`, `compare_bottle_pairs.py` | Which sensor value best represents a bottle's water; step02b's pairs against the lag diagnosis' |
+| `tools/inspect_eco_channels.py` | What the ECO's third channel carries, and scans at the Legacy full range |
+| `tools/make_synthetic_cruise.py` | A synthetic cruise built to differ from P45 wherever the code could assume it |
+| `tools/make_baseline.py` | Freezes the current products as the regression baseline (local only) |
+| `tools/migrate_layout.py` | Moves a cruise between the data-level layouts, checked file by file |
+| `build_bottle_nitrate_table.py` | Bottle mode: `.btl` firings to `<CRUISE>_bottle_ctd.csv`, joined to lab nitrate by cast and Niskin |
+| `build_bottle_table.py` | Without `.btl`: pairs bottles to casts by time, carries hand flags, reports the CTD's stops against the sheet depths |
+| `combine_readable_profiles.py` | Stacks step04's readable tables into one cruise table |
+| `cnv_to_csv.py`, `verify_reproducibility.py`, `fix_psa_output_paths.py`, `step03_run_report.py` | `.cnv` to CSV; compare two step01 runs; blank PSA output paths; a readable step03 report |
 
 ---
 
-## 6. Before the first run — checklist
+## 9. Tests, baseline and CI
 
-- [ ] **`01_datcnv.psa`** present in `psa/` (variable selection, full cast down+up, no binning,
-      SBE 43 O2 Tau OFF / hysteresis ON). The bottle variant is auto-generated when needed.
-- [ ] The other chain PSAs present: `05_filter`, `02_alignctd`, `04_celltm`,
-      `06a_loopedit_percentmean` (+`06b`), `07_derive`, `08b_binavg_1m_down`, `08d_binavg_1s_full`.
-- [ ] Every PSA has **blank** Input/Output directory and Name append (so the runner's CLI flags control
-      output). Confirm via `_audit/01_psa_diagnostic.csv` — `warnings` column empty.
-- [ ] CTD config (`19-8460.xmlcon`) in the cruise `Instrument_Calibration_Files/`.
-- [ ] SUNA cal (`SNA2503C.cal`) in `metadata/calibration/`.
-- [ ] For bottle mode: each cast's `.afm` sits **beside its `.hex` in `L0/CTD/`** (same basename), and
-      `10_bottlesum.psa` present if you want `.btl` summaries.
-- [ ] Same `CRUISE_ID` across step01/02/03; `APPLY_BOTTLES` matches the cruise.
-- [ ] Fill the bottle table per `README_bottle_columns.md` (for the calibrated nitrate product).
-- [ ] step01: dry-run first, inspect the audit CSVs, then `RUN_SBE_COMMANDS = True`.
+`pytest -q` runs the suite (245 tests on a machine with the cruise data, Nov 2026; tests that need cruise data or
+the Sea-Bird software skip elsewhere). GitHub Actions runs it on Python 3.10 to 3.12 on every push. Notebook tests
+run the real notebooks on synthetic cruises through `tools/run_notebook.py`. `tools/make_baseline.py` freezes the
+current L2 products under `tests/baseline/local/` (git-ignored); `tests/test_baseline_products.py` then reports any
+product that changes, so a change that moves a number is reviewed before the baseline is frozen again.
+
+Workflow: each piece of work on a fresh branch from `main`, one squash-merged pull request each. Versions are
+calendar versions, `YYYY.M.D` (non-zero-padded), tagged `vYYYY.M.D` on `main` and set in `pyproject.toml`.
 
 ---
 
-## 7. Fixes and lessons from the real-data runs
+## 10. Known gaps and planned work
 
-Recorded so they are not re-introduced:
-
-- **Section before Loop Edit** is essential given the staged equilibration dip; sectioning must happen
-  *before* Loop Edit, not after (order is not interchangeable). The Section step preserves the SBE
-  `.cnv` **CRLF** line endings byte-for-byte (writing LF-only makes SBE report
-  "Header line length exceeds buffer length").
-- **Per-stage L2 folders.** Each module writes to its own folder (`Filter/`, `Align_CTD/`, `Cell_tm/`,
-  `Section/`, `Loop_Edit/`, `Derived/`). The derived hub was renamed `Derived_Parameter/` → `Derived/`.
-- **Bottle mode `CreateFile`.** "Create both data and bottle file" is `CreateFile=2` in the PSA;
-  `CreateFile=1` is bottle-only (writes `.ros`, no `.cnv`). The auto-generated bottle PSA uses `2` and
-  self-heals a stale one.
-- **No-afm casts in bottle mode** fall back to the profile PSA automatically (bottle-only DatCnv would
-  otherwise halt with no `.cnv`).
-- **Work-folder cleanup** clears read-only (raw `.hex` are often archived read-only), retries transient
-  locks, and falls back to a fresh timestamped work folder. A **per-module timeout** prevents a stuck
-  SBE dialog from hanging the run and orphaning a process.
-- **PSA output paths were hardcoded** in the original set; blanked so the runner's CLI flags control
-  output. Re-blank (or re-save cleanly) if you ever re-export a PSA from the SBE GUI.
-- **SUNA files are raw SATSLF frames**, paired to casts by time overlap via `suna_cast_map.csv`.
-- **19plus V2 specifics.** Strain-gauge pressure (not Digiquartz); temperature `tv290C`, conductivity
-  `c0S/m`, salinity `sal00`/`sal78` downstream.
-- **One definition, now one implementation.** The descent-onset / sectioning logic, the `.cnv` reader,
-  the Sea-Bird bad-flag handling and the shared helpers were previously copied across step00b / step00d /
-  step00e and the step01 Section. They now live once in the `suncat` package (`suncat.section`,
-  `suncat.io.cnv`, `suncat.util`, `suncat.calc.binning`) and are imported, so the audit notebooks stay
-  consistent with step01 by construction, and the stage audit still reproduces step01's physical stages
-  to 0.0 difference. step01 is the source of truth for the production products.
-
-## 8. Known limitation — Stage 1 TSP
-
-`step03`'s `STAGE1_MODE` defaults to `"onboard"` (SUNA firmware T/S/P-corrected nitrate as the starting
-point; bottle-based Stages 2–3 do the main accuracy correction). A `"tsp"` mode that re-derives from
-raw spectra is included but **work-in-progress** (needs the `OPTICAL_WAVELENGTH_OFFSET` baseline,
-Sakamoto 2009); keep `"onboard"` until validated.
+- **The `_EXAMPLE` cruise** runs only the SUNA QA path: its casts do not pair in step02, it has no
+  `suna_calibration.json`, no `Derived` files, and its 1 m files lack the bin-type header. The synthetic-cruise
+  generator covers step07, step08 and step06 meanwhile.
+- **step04 plots the cross-check nitrate** (`L2/SUNA_calibrated`, from step03_suna_bottle_calibration), binned by
+  rounding pressure onto depth; it should read the L3 grid, as step06 does.
+- **Oxygen.** The SBE 43 path in step07 waits for Winkler titrations.
+- **SUNA Stage 1 re-derivation** (`STAGE1_MODE = "tsp"`, Sakamoto et al. 2009) is work in progress and needs
+  `SNA2503E.cal`, the file the onboard nitrate was computed with; keep `"onboard"`.
+- **Open questions** carried in VALIDATION: the SUNA's factory against field gain, the ECO's Legacy coefficients
+  and third channel, P45_06's upper-layer chlorophyll, the Cell Thermal Mass coefficients.
+- **Package migration.** Parts of the notebooks still carry their own code that belongs in `suncat`.
+- **Two root variables.** `project_paths.py` reads `CTD_PIPELINE_ROOT`, `suncat.config` reads `SUNCAT_CTD_ROOT`; one
+  should go.
 
 ---
 
-## 9. Helper tools (standalone utilities)
+## References
 
-Run directly (`python <script>.py`); most have a settings block at the top.
+**CTD and SUNA nitrate**
 
-| Script | What it does | When to run |
-|--------|--------------|-------------|
-| `cnv_to_csv.py` | Pick an input folder of `.cnv` and an output folder; converts every `.cnv` to `.csv` (headers from the `# name` lines; values copied through exactly). Pure standard library. | Any time someone needs the `.cnv` as plain CSV. |
-| `verify_reproducibility.py` | Compares two step01 output trees by `.cnv` **data columns** (ignoring the run-timestamp header lines); reports per-variable max abs diff and flag counts. | To confirm a rerun reproduces the same numbers. |
-| `build_bottle_nitrate_table.py` | **Bottle-mode path.** Parses the `L2/CTD/Bottle/*.btl` files into `<CRUISE>_bottle_ctd.csv` (cast, bottle no, firing pressure/depth/time, T, S), and — if you supply lab nitrate keyed by `cast_id` + `bottle_no` — joins it exactly into the step03-ready `<CRUISE>_bottle_nitrate.csv` (+ an `_UNMATCHED.csv`). Uses `ctd_lib.py`. | Bottle cruises (`.afm`/`.btl`), after lab nitrate arrives, before step03. |
-| `build_bottle_table.py` | **Time-pairing fallback.** Pairs discrete nutrient bottle samples to CTD/SUNA casts by time (for cruises without `.afm`/`.btl`), with confidence/reason; writes the audit trail and the step03-ready `<CRUISE>_bottle_nitrate.csv`. | When there are no `.btl` firings to key on. |
-| `step03_run_report.py` | One readable report from step03's CSVs: bottle coverage, RMSE progression, per-cast medians, fit coefficients, verdict. | After step03. |
-| `combine_readable_profiles.py` | Stacks step04's per-cast readable CSVs into one cruise-wide table. | After step04. |
-| `fix_psa_output_paths.py` | Blanks hardcoded OutputDir/OutputFile/NameAppend in the PSAs. | Once, or after re-saving any PSA from the SBE GUI. |
+- Johnson, K. S., & Coletti, L. J. (2002). In situ ultraviolet spectrophotometry for high resolution and long-term
+  monitoring of nitrate, bromide and bisulfide in the ocean. *Deep-Sea Research I, 49,* 1291 to 1305.
+- Sakamoto, C. M., Johnson, K. S., & Coletti, L. J. (2009). Improved algorithm for the computation of nitrate
+  concentrations in seawater using an in situ ultraviolet spectrophotometer. *Limnol. Oceanogr.: Methods, 7,*
+  132 to 143.
+- Sakamoto, C. M., et al. (2017). Pressure correction for the computation of nitrate concentrations in seawater
+  using an in situ ultraviolet spectrophotometer. *Limnol. Oceanogr.: Methods, 15,* 897 to 902.
+- Plant, J. N., et al. (2023). Updated temperature correction for computing seawater nitrate with in situ
+  ultraviolet spectrophotometer and submersible ultraviolet nitrate analyzer nitrate sensors. *Limnol. Oceanogr.:
+  Methods, 21,* 581 to 593.
+- Zheng, B., et al. (2024). Bias-corrected high-resolution vertical nitrate profiles from the CTD rosette-mounted
+  SUNA. *Limnol. Oceanogr.: Methods, 22,* 889 to 902.
+- Sea-Bird Scientific. SBE Data Processing manual and application notes; ECO V2 user manual (Legacy output,
+  appendix A); SUNA V2 manual.
+- GO-SHIP / WOCE Hydrographic Programme. CTD operations guidance, including the surface soak.
 
-**Core library.** The reference implementations now live in the `suncat` package: the `.cnv` reader
-(`suncat.io.cnv`), the descent / sectioning (`suncat.section`), the seawater functions (`suncat.calc`:
-PSS-78 salinity, potential temperature, pressure→depth), binning (`suncat.calc.binning`), and the
-Sea-Bird runner (`suncat.sbe`). `ctd_lib.py` remains as a compatibility shim that re-exports the seawater
-functions, delegates its descent walk-back to `suncat.section`, and still holds the numpy-array `.cnv`
-reader and the CRLF-safe `section_cnv` writer used by the standalone tools. The package is covered by
-`tests/` (`pytest -q`), which checks each function against published reference values, so a regression
-is caught before it reaches data.
-
----
-
-## 9b. In progress / planned
-
-- **Package migration.** `suncat` holds the extracted core (readers, sectioning, seawater science,
-  binning, the SBE runner, shared helpers), and the step00 notebooks import it. Still to migrate: the
-  full step01 chain orchestration into `suncat.sbe`, and the SUNA / productivity / sections modules, with
-  the regression baseline extended to guard the L2/L3 products directly.
-- **Hydrographic sections (step06).** Built (Section 4). Still needs each cruise's station coordinate
-  table (cast to lat/lon) and a transect definition (which casts, in what order).
-- **Dissolved oxygen calibration (step07).** The oxygen path is coded but **dormant**: no Winkler
-  titrations yet. Drop the P45_08 Winkler table into `metadata/winkler_oxygen/` and enable the oxygen
-  target to calibrate SBE 43 against it (same offset + gain machinery as chlorophyll).
-- **SUNA Stage-1 TSP re-derivation (step03).** `STAGE1_MODE = "tsp"` from raw spectra is still
-  work-in-progress (needs the `OPTICAL_WAVELENGTH_OFFSET` baseline, Sakamoto 2009); keep `"onboard"`
-  until validated (Section 8).
-
----
-
-## Versioning
-
-`suncat` uses **calendar versioning (CalVer)**, `YYYY.MM.DD` (for example `2026.11.11`), which suits a
-reproducibility-oriented processing toolkit: the version answers "which processing vintage produced this
-data product," and nothing external pins against a semantic API. Releases are cut on GitHub as tags
-`vYYYY.MM.DD` on `main`, with the same string set in `pyproject.toml`. Use non-zero-padded month and day
-so the tag matches the normalised Python version (for example, September 1 is `2026.9.1`, not
-`2026.09.01`).
-
----
-
-## 10. References
-
-- Sakamoto, C. M., Johnson, K. S., & Coletti, L. J. (2009). Improved algorithm for nitrate from a UV
-  spectrophotometer. *Limnol. Oceanogr.: Methods, 7,* 132–143.
-- Sakamoto, C. M., et al. (2017). Pressure correction for nitrate computation. *Limnol. Oceanogr.:
-  Methods, 15,* 897–902.
-- Plant, J. N., et al. (2023). Updated temperature correction for seawater nitrate. *Limnol.
-  Oceanogr.: Methods, 21,* 581–593.
-- Zheng, B., et al. (2024). Bias-corrected high-resolution vertical nitrate profiles from the CTD
-  rosette-mounted SUNA. *Limnol. Oceanogr.: Methods, 22,* 889–902.
-- Sea-Bird Scientific. SBE Data Processing / Seasoft module documentation, and application notes on
-  pump-controlled sampling and the surface soak for sensor equilibration.
-- GO-SHIP / WOCE Hydrographic Programme. CTD operations guidance, including the surface soak (lower to
-  depth, pause, return near the surface, then profile) for pump priming and sensor equilibration.
-
-**Productivity calibration (step07): chlorophyll fluorescence and dissolved oxygen.**
+**Chlorophyll fluorescence and oxygen**
 
 - Roesler, C., et al. (2017). Recommendations for obtaining unbiased chlorophyll estimates from in situ
-  chlorophyll fluorometers. *Limnol. Oceanogr.: Methods, 15,* 572–585. (Factory calibrations over-read;
-  a region-specific slope correction is needed.)
+  chlorophyll fluorometers. *Limnol. Oceanogr.: Methods, 15,* 572 to 585.
 - Lorenzen, C. J. (1966). A method for the continuous measurement of in vivo chlorophyll concentration.
-  *Deep-Sea Research, 13,* 223–227. (In-vivo fluorescence as a proxy for chlorophyll-a.)
-- Holm-Hansen, O., et al. (1965). Fluorometric determination of chlorophyll. *ICES J. Mar. Sci., 30,*
-  3–15. (Extracted fluorometric chlorophyll, the discrete reference for step07.)
-- Welschmeyer, N. A. (1994). Fluorometric analysis of chlorophyll a in the presence of chlorophyll b
-  and pheopigments. *Limnol. Oceanogr., 39,* 1985–1992.
-- Kiefer, D. A. (1973). Fluorescence properties of natural phytoplankton populations. *Marine Biology,
-  22,* 263–269. (Daytime fluorescence quenching, the basis for the NPQ flag.)
+  *Deep-Sea Research, 13,* 223 to 227.
+- Holm-Hansen, O., et al. (1965). Fluorometric determination of chlorophyll. *ICES J. Mar. Sci., 30,* 3 to 15.
+- Welschmeyer, N. A. (1994). Fluorometric analysis of chlorophyll a in the presence of chlorophyll b and
+  pheopigments. *Limnol. Oceanogr., 39,* 1985 to 1992.
+- Kiefer, D. A. (1973). Fluorescence properties of natural phytoplankton populations. *Marine Biology, 22,*
+  263 to 269.
 - Falkowski, P., & Kiefer, D. A. (1985). Chlorophyll a fluorescence in phytoplankton: relationship to
-  photosynthesis and biomass. *J. Plankton Research, 7,* 715–731.
-- Cullen, J. J. (1982). The deep chlorophyll maximum: comparing vertical profiles of chlorophyll a.
-  *Can. J. Fish. Aquat. Sci., 39,* 791–803.
-- Carpenter, J. H. (1965). The Chesapeake Bay Institute technique for the Winkler dissolved oxygen
-  method. *Limnol. Oceanogr., 10,* 141–143. (Winkler reference for the dormant oxygen path.)
+  photosynthesis and biomass. *J. Plankton Research, 7,* 715 to 731.
+- Cullen, J. J. (1982). The deep chlorophyll maximum: comparing vertical profiles of chlorophyll a. *Can. J.
+  Fish. Aquat. Sci., 39,* 791 to 803.
 - Schmechtig, C., et al. (2018). BGC-Argo quality control manual for the chlorophyll-a concentration.
-  (NPQ correction and in-situ fluorometer QC conventions.)
+- Carpenter, J. H. (1965). The Chesapeake Bay Institute technique for the Winkler dissolved oxygen method.
+  *Limnol. Oceanogr., 10,* 141 to 143.

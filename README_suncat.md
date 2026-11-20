@@ -22,6 +22,8 @@ Optional extras: `.[viz]` (figures), `.[netcdf]` (NetCDF output).
 
 No paths are hardcoded. Point the package at your pipeline root with the `SUNCAT_CTD_ROOT`
 environment variable, or pass `root=` to `suncat.config.for_cruise(...)`.
+The notebooks and scripts resolve their folders through `project_paths.py`, which reads
+`CTD_PIPELINE_ROOT` instead (README, known gaps).
 
 ## Regression baseline (do this before any refactor)
 
