@@ -190,6 +190,9 @@ PRODUCTS = (
     ("grid_1m_down",         "L3/gridded",             "L3/gridded",              "*"),
     ("qc_plots",             "L2/CTD/qc_plots",        "_figures/qc",             "*"),
     ("profile_plots",        "L2/CTD/profile_plots",   "_figures/profiles",       "*"),
+    # step04's per-cast tables with readable column names: data, so not under _figures (until Nov 2026 they were
+    # written beside the profile figures)
+    ("profile_tables",       "L2/CTD/profile_tables",  "L3/CTD/profiles_readable", "*_readable.csv"),
     ("profiles_table",       "L2/CTD",                 "L3/CTD",                  "combined_all_casts_*.csv"),
 )
 LAYOUTS = {

@@ -37,7 +37,7 @@ if len(sys.argv) > 1:
     CRUISE_ID = sys.argv[1]
 
 CRUISE_DIR = CTD_ROOT / "cruises" / CRUISE_ID
-PLOT_ROOT  = product_dir(CRUISE_ID, "profile_plots")   # where step04 wrote _readable.csv
+PLOT_ROOT  = product_dir(CRUISE_ID, "profile_tables")  # where step04 writes _readable.csv (not the figure folder)
 OUT_DIR    = product_dir(CRUISE_ID, "profiles_table")   # product "profiles_table"
 OUT_NAME   = "combined_all_casts_final_1m_down_profiles.csv"
 
@@ -66,7 +66,7 @@ def order_columns(cols) -> list:
 
 def main() -> None:
     if not PLOT_ROOT.exists():
-        raise SystemExit(f"profile_plots folder not found: {PLOT_ROOT}\n"
+        raise SystemExit(f"profile_tables folder not found: {PLOT_ROOT}\n"
                          f"Run step04 first so the *_readable.csv files exist.")
 
     files = sorted(PLOT_ROOT.glob("*_readable.csv"))
