@@ -247,3 +247,30 @@ def test_a_gradient_with_frames_at_different_depths_is_not_a_disagreement():
     assert abs(d[0]) < 0.05
     pu = np.full(8, 52.0)                                         # every up frame at the stop: too far to read 50
     assert np.isnan(g.updown_difference([50.0], pd_, pd_ - 40.0, pu, pu - 40.0, 2.5, 3)[0])
+
+
+def test_chl_above_the_calibrations_range_is_flagged(ctd):
+    df, meta = ctd
+    chl = pd.DataFrame({"pressure_db": [8.0, 9.0, 10.0], "cast": "C1", "chl_corrected": [0.4, 2.6, 1.9],
+                        "chl_cal_max": 2.0})
+    out, st = g.grid_cast("C1", df, meta, chl=chl)
+    r = out.set_index("pressure_db")
+    assert r.loc[9.0, "chl_above_cal"] == True and r.loc[8.0, "chl_above_cal"] == False  # noqa: E712
+    assert pd.isna(r.loc[11.0, "chl_above_cal"]) and st.chl_above_cal_bins == 1
+    assert any("above the calibration's range (2 mg/m3" in n for n in st.notes)
+    out2, _ = g.grid_cast("C1", df, meta, chl=chl.drop(columns="chl_cal_max"))     # an older product: not assessed
+    assert out2["chl_above_cal"].isna().all()
+
+
+def test_npq_risk_by_par_beside_the_daylight_rule(ctd):
+    """Daylight cast (11:16 UTC): the clock rule marks 8 to 10 dbar. A cloudy day's PAR reaches the threshold only at
+    8 dbar, so the two rules disagree at 9 and 10 dbar, and that is reported, not resolved."""
+    df, meta = ctd
+    df = df.assign(**{"par/sat/log": [250.0, 80.0, 40.0, 20.0]})
+    out, st = g.grid_cast("C1", df, meta)
+    assert list(out["chl_npq_risk_par"]) == [True, False, False, False]
+    assert list(out["chl_npq_risk"]) == [True, True, True, False]               # unchanged
+    assert (st.npq_bins_clock, st.npq_bins_par, st.npq_bins_agree, st.npq_bins_both_known) == (3, 1, 2, 4)
+    assert any("they disagree on 2 bins" in n for n in st.notes)
+    out2, _ = g.grid_cast("C1", ctd[0], meta)                                    # no PAR sensor: not assessed
+    assert out2["chl_npq_risk_par"].isna().all()

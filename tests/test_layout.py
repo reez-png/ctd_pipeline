@@ -20,6 +20,7 @@ V1_TODAY = {
     "chl_calibrated_noNPQ": "L3/productivity_noNPQ", "ctd_grid_1m_down": "L2/CTD/CTD_1m_down",
     "grid_1m_down": "L3/gridded", "qc_plots": "L2/CTD/qc_plots", "profile_plots": "L2/CTD/profile_plots",
     "profiles_table": "L2/CTD",
+    "profile_tables": "L2/CTD/profile_tables",   # added Nov 2026 (step04's readable tables left the figure folder)
 }
 SBE_STAGES = ("ctd_filter", "ctd_align", "ctd_celltm", "ctd_section", "ctd_loopedit", "ctd_derived")
 
@@ -39,7 +40,7 @@ def test_v2_follows_the_agreed_decisions():
     for k in ("suna_l2", "nitrate_qc", "suna_calibrated", "chl_calibrated", "chl_calibrated_noNPQ"):
         assert v2[k].startswith("L2/"), k                  # merged, calibrated and flagged products in L2
     gridded = {k for k, v in v2.items() if v.startswith("L3")}
-    assert gridded == {"ctd_grid_1m_down", "grid_1m_down", "profiles_table"}  # decisions 3 and 4: only down-cast grids in L3
+    assert gridded == {"ctd_grid_1m_down", "grid_1m_down", "profiles_table", "profile_tables"}  # decisions 3 and 4: only down-cast grids in L3
     assert not any(v.startswith("L2/CTD/") and k in SBE_STAGES for k, v in v2.items())
 
 

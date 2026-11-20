@@ -29,6 +29,12 @@ nitrate's lag_limited flag, the cast's own SUNA response time and slow-response 
 via suncat.suna_response; empty when the cruise has none: not assessed), the SUNA clock offset step02 applied,
 and a non-photochemical-quenching risk
 flag for chlorophyll in daylit near-surface bins (the criterion step07 uses to exclude bottles from its fit).
+Two more chlorophyll columns (Nov 2026): chl_above_cal, where the bin's value exceeds the highest bottle step07's
+calibration was fitted to (an extrapolation of the line), and chl_npq_risk_par, the NPQ question answered by the
+bin's own PAR (at or above npq_par, 100 umol photons m-2 s-1 by default) instead of by clock time and depth. The
+PAR rule is reported beside the daylight rule, not in place of it: step07 still drops bottles by the daylight
+rule, and the two are compared per cast before either is changed. The 100 is a screening threshold chosen here,
+not a measured onset of quenching.
 
 Where the down-cast and up-cast disagree (Nov 2026), per bin: the gridded nitrate is the down-cast only, and a
 SUNA that lags, or holds water in its optical path, reads the two legs differently wherever nitrate changes with
@@ -73,6 +79,7 @@ class GridConfig:
     hyst_win_dbar: float = 2.5       # down/up comparison window around each bin centre
     hyst_min_per_leg: int = 3        # frames needed on each leg inside the window
     hyst_tol_uM: float = 2.0         # |up - down| above this flags the bin
+    npq_par: float = 100.0           # umol photons m-2 s-1: a bin at or above this PAR counts as NPQ risk by light
     max_ctd_gap_s: float = 1.0       # fallback only: a frame must lie within this of a CTD 1 s record
 
 
@@ -92,6 +99,11 @@ class CastStats:
     chl_rows: int = 0
     chl_used: int = 0
     chl_bins: int = 0
+    chl_above_cal_bins: int = 0
+    npq_bins_clock: int = 0
+    npq_bins_par: int = 0
+    npq_bins_agree: int = 0
+    npq_bins_both_known: int = 0
     notes: list = field(default_factory=list)
 
     def row(self) -> dict:
@@ -324,6 +336,21 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
         out["chl_mg_m3"] = s["mean"].reindex(pd.Index(b_ctd)).to_numpy()
         out["chl_n"] = pd.to_numeric(s["n"].reindex(pd.Index(b_ctd)), errors="coerce").fillna(0).astype(int).to_numpy()
         st.chl_bins = int((out["chl_n"] > 0).sum())
+        # above the calibration's range: the bin's value exceeds the highest bottle step07 fitted to
+        cmax = pd.to_numeric(c["chl_cal_max"], errors="coerce").dropna() if "chl_cal_max" in c else pd.Series(dtype=float)
+        if len(cmax):
+            v = out["chl_mg_m3"].to_numpy(float)
+            out["chl_above_cal"] = pd.Series(np.where(np.isfinite(v), v > float(cmax.iloc[0]), pd.NA),
+                                             dtype="boolean").to_numpy()
+            st.chl_above_cal_bins = int(np.nansum(np.where(np.isfinite(v), v > float(cmax.iloc[0]), False)))
+            if st.chl_above_cal_bins:
+                zz = out.loc[out["chl_above_cal"].fillna(False).astype(bool), "pressure_db"]
+                st.notes.append(f"chl above the calibration's range ({float(cmax.iloc[0]):.3g} mg/m3, the highest bottle "
+                                f"in the fit) in {st.chl_above_cal_bins} bins ({zz.min():g} to {zz.max():g} dbar)")
+        else:
+            out["chl_above_cal"] = pd.Series([pd.NA] * len(out), dtype="boolean").to_numpy()
+    if "chl_above_cal" not in out:
+        out["chl_above_cal"] = pd.Series([pd.NA] * len(out), dtype="boolean").to_numpy()
     pos = position or {}
     start = pos.get("start_utc")
     if start is None or pd.isna(start):
@@ -331,6 +358,24 @@ def grid_cast(cast_id: str, ctd: pd.DataFrame, meta: dict, nitrate: pd.DataFrame
     lon = pos.get("lon")
     lon = float(lon) if lon is not None and pd.notna(lon) else None
     out["chl_npq_risk"] = npq_risk(out["pressure_db"].to_numpy(), start, cfg, lon).to_numpy()
+    # the same question answered by the light itself: the bin's PAR (SBE's bin average of the PAR sensor)
+    pc = next((k for k in out.columns if str(k).lower().startswith("par")), None)
+    if pc is not None:
+        par = pd.to_numeric(out[pc], errors="coerce").to_numpy(float)
+        out["chl_npq_risk_par"] = pd.Series(np.where(np.isfinite(par), par >= cfg.npq_par, pd.NA),
+                                            dtype="boolean").to_numpy()
+        clk = pd.Series(out["chl_npq_risk"], dtype="boolean")
+        pr = pd.Series(out["chl_npq_risk_par"], dtype="boolean")
+        both = clk.notna() & pr.notna()
+        st.npq_bins_clock = int(clk.fillna(False).sum())
+        st.npq_bins_par = int(pr.fillna(False).sum())
+        st.npq_bins_both_known = int(both.sum())
+        st.npq_bins_agree = int((clk[both] == pr[both]).sum())
+        if st.npq_bins_both_known and st.npq_bins_agree < st.npq_bins_both_known:
+            st.notes.append(f"NPQ risk: daylight rule {st.npq_bins_clock} bins, PAR >= {cfg.npq_par:g} rule "
+                            f"{st.npq_bins_par} bins; they disagree on {st.npq_bins_both_known - st.npq_bins_agree} bins")
+    else:
+        out["chl_npq_risk_par"] = pd.Series([pd.NA] * len(out), dtype="boolean").to_numpy()
     st.notes.append(f"NPQ daylight: solar time at {lon:.2f} E" if (cfg.solar_time and lon is not None)
                     else f"NPQ daylight: clock time UTC{cfg.utc_offset_hours:+g} h (no longitude)")
     return out, st
