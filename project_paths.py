@@ -140,14 +140,6 @@ def find_discrete(cruise_id: str, kind: str, pattern: str | None = None) -> Path
     return hits[0]
 
 
-def find_station_coords(cruise_id: str) -> Path:
-    """The step06 station coordinate table ``cruises/<cruise_id>/metadata/station_coords.csv``."""
-    p = cruise_metadata_dir(cruise_id) / "station_coords.csv"
-    if not p.exists():
-        raise FileNotFoundError(f"station_coords.csv not found for {cruise_id}: {p}")
-    return p
-
-
 def suna_cast_map(cruise_id: str) -> Path:
     """``cruises/<cruise_id>/metadata/suna_cast_map.csv``."""
     return cruise_metadata_dir(cruise_id) / "suna_cast_map.csv"

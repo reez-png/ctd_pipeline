@@ -64,8 +64,9 @@ Bold marks a folder that moves. `v1` is the layout the pipeline was built on; `v
 ## Findings from the inventory, and where they stand (Nov 2026)
 
 - **Which nitrate feeds the products.** Resolved for the grid: step08 grids the production nitrate
-  (`nitrate_qc`, from `step03_nitrate_qc`) and step06 reads step08's grid. Still open for `step04_plot_profiles`,
-  which plots the cross-check product (`suna_calibrated`), binned by rounding pressure onto depth.
+  (`nitrate_qc`, from `step03_nitrate_qc`), and step04 and step06 read step08's grid (step04 since Nov 2026, joined
+  bin by bin on pressure; it had plotted the cross-check product, `suna_calibrated`, matched by rounding pressure
+  onto depth). `suna_calibrated` is now read by step04 only as a fallback for a cast without a grid.
 - **chl-a was calibrated on 1 m bins.** Resolved: `step07` fits through medians of 1 m cells but applies the
   calibration to every scan, so `L2/productivity` is at native resolution, and step08 grids it.
 - **`step05_productivity_calibration.ipynb`**, an earlier copy of step07 writing to the same folder, is retired.

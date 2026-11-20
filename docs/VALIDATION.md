@@ -7,19 +7,23 @@ shelf; the limitations are stated in section 4. Numbers are as of 20 Nov 2026.
 
 ## 1. Synthetic data (reproducible by anyone)
 
-**`cruises/_EXAMPLE`** (three casts; the SUNA is planted to read `SUNA = -1.10 + 0.879 x true nitrate`). It
-currently exercises the SUNA QA path only:
+**`cruises/_EXAMPLE`** (three casts; the SUNA is planted to read `SUNA = -1.10 + 0.879 x true nitrate`, the
+fluorometer `1.14 x true chlorophyll`). The whole path after step01 runs on it (`tests/test_example_cruise.py`):
 
 | Notebook | A correct run gives |
 |---|---|
 | `suna/step00_suna_inventory` | 633 frames in 3 files; 90 warm-up frames flagged |
 | `suna/step01_suna_spectral_qc` | 543 of 633 frames L1-clean (85.8%) |
+| `step02_merge_ctd_suna` | 3 of 3 casts paired |
 | `suna/step02_suna_colocation` | 633 of 633 frames matched to casts; clock check 1.0 s |
 | `suna/step03_suna_bottle_calibration` | 7 homogeneous bottles of 10 matched; `SUNA = -1.131 + 0.8788 x bottle`, R2 0.9999 |
+| `step03_nitrate_qc` (fit mode) | a1 0.882, a0 -1.15 (10 bottles); RMSE 1.76 to 0.04 uM |
+| `productivity/step07_productivity_calibration` | gain 1.127 (95% CI 1.124 to 1.131), n 6 |
+| `step08_grid_l3` | 3 casts gridded; no bin flagged by the down/up check (the example's SUNA has no lag) |
 
-The fit recovers the planted gain to 0.1% and the offset to 0.03 uM. The example does not yet run the production
-path: `step02_merge_ctd_suna` pairs none of its casts, it has no `suna_calibration.json` for `step03_nitrate_qc`,
-no `Derived` files for step07, and its 1 m files lack the bin-type header step08 requires (README, known gaps).
+The fits recover the planted SUNA gain to within 0.3% and offset to within 0.06 uM, and the chlorophyll gain to
+within 1.1%. Until Nov 2026 the example ran only the SUNA QA path (step02 found no SUNA files on a case-sensitive
+file system; no `suna_calibration.json`, `Derived` files or bin-type header).
 
 **`tools/make_synthetic_cruise.py`** writes cruises built to differ from P45 wherever the code could assume it
 (another cruise id, three-digit cast files, `prDM`, a cast without Loop Edit flags, mean-pressure bins, the

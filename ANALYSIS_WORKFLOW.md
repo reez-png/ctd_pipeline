@@ -71,8 +71,8 @@ with the same machinery as chlorophyll.
 
 **Which nitrate is the one to report?**
 `L2/nitrate/<cast>_nitrate_QC.csv` from `step03_nitrate_qc`, gridded by step08 into `L3/gridded/`. The
-`L2/SUNA_calibrated` product from `suna/step03_suna_bottle_calibration` is the cross-check (step04 still plots it;
-README, known gaps).
+`L2/SUNA_calibrated` product from `suna/step03_suna_bottle_calibration` is a cross-check; step04 and step06 plot the
+grid, and step04 says so per cast (`nitrate: gridded (step08)`).
 
 **Why do some gridded nitrate bins carry `nitrate_hyst_flag`?**
 The SUNA lags, so in the nitracline the down-cast reads low and the up-cast high. step08 compares the two legs at

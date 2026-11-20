@@ -69,11 +69,12 @@ Developed on Python 3.14; CI runs the tests on 3.10 to 3.12. `requirements.txt` 
 `requirements-lock.txt` the exact tested environment. The notebook kernel must be the environment `suncat` is
 installed in. step01 also needs Sea-Bird **SBE Data Processing** (Windows); everything after it is pure Python.
 
-**Try it without cruise data.** `cruises/_EXAMPLE` runs the SUNA QA path (`suna/step00_suna_inventory`,
-`suna/step01_suna_spectral_qc`, `suna/step02_suna_colocation`, `suna/step03_suna_bottle_calibration`) and should
-recover its planted calibration; `tools/make_synthetic_cruise.py <root>` writes a cruise that runs step07, step08
-and step06. Expected numbers: [`docs/VALIDATION.md`](docs/VALIDATION.md) section 1. The calibration files must be
-reachable: either run from the repo, or copy `metadata/calibration/` next to `cruises/` under your data root.
+**Try it without cruise data.** `cruises/_EXAMPLE` (three synthetic casts) runs the whole path after step01, from
+the SUNA QA to step08 and the figures, and recovers what was planted in it; the order and the expected numbers are
+in [`cruises/_EXAMPLE/README_EXAMPLE.md`](cruises/_EXAMPLE/README_EXAMPLE.md), and `tests/test_example_cruise.py`
+checks them. `tools/make_synthetic_cruise.py <root>` writes cruises built to differ from P45 (another hemisphere,
+other column names, cast numbering). The calibration files must be reachable: either run from the repo, or copy
+`metadata/calibration/` next to `cruises/` under your data root.
 
 ```bash
 python tools/run_notebook.py processing_scripts/notebook/suna/step01_suna_spectral_qc.ipynb --set CRUISE_ID=_EXAMPLE
@@ -110,7 +111,7 @@ cruises/<CRUISE_ID>/
 ├── L1/CTD/                    DatCnv *.cnv; Filter/ Align_CTD/ Cell_tm/ Section/ Loop_Edit/ Derived/ CTD_1s/
 ├── L1/SUNA/                   per-frame spectral QC (suna_L1_clean)
 ├── L2/SUNA/                   <cast>_SUNA_1s.csv (merged), <CRUISE>__suna_L2_colocated.csv
-├── L2/SUNA_calibrated/        step03_suna_bottle_calibration's corrected profiles (the cross-check)
+├── L2/SUNA_calibrated/        step03_suna_bottle_calibration's corrected profiles (a cross-check, not plotted)
 ├── L2/nitrate/                <cast>_nitrate_QC.csv: the production nitrate (step03_nitrate_qc)
 ├── L2/productivity/           calibrated chlorophyll, every scan (step07); productivity_noNPQ/ beside it
 ├── L2/CTD/Bottle/             .btl (bottle mode)
@@ -243,7 +244,7 @@ nitrate and calibrated chlorophyll averaged onto the same bins from flagged-clea
 
 ### step04 to step06: figures and tables
 
-step04 profile figures and readable tables; step05 cline, DCM and mixed-layer diagnostics; step06 cross-shelf
+step04 profile figures and readable tables, with the nitrate and calibrated chlorophyll from step08's grid; step05 cline, DCM and mixed-layer diagnostics; step06 cross-shelf
 sections, with step08's nitrate and red ticks where the down/up check flags a bin.
 
 ### The CTD QC layer (step00a to step00e)
@@ -348,11 +349,6 @@ calendar versions, `YYYY.M.D` (non-zero-padded), tagged `vYYYY.M.D` on `main` an
 
 ## 10. Known gaps and planned work
 
-- **The `_EXAMPLE` cruise** runs only the SUNA QA path: its casts do not pair in step02, it has no
-  `suna_calibration.json`, no `Derived` files, and its 1 m files lack the bin-type header. The synthetic-cruise
-  generator covers step07, step08 and step06 meanwhile.
-- **step04 plots the cross-check nitrate** (`L2/SUNA_calibrated`, from step03_suna_bottle_calibration), binned by
-  rounding pressure onto depth; it should read the L3 grid, as step06 does.
 - **Oxygen.** The SBE 43 path in step07 waits for Winkler titrations.
 - **SUNA Stage 1 re-derivation** (`STAGE1_MODE = "tsp"`, Sakamoto et al. 2009) is work in progress and needs
   `SNA2503E.cal`, the file the onboard nitrate was computed with; keep `"onboard"`.

@@ -114,3 +114,7 @@ tests/baseline/local/
 # Per-cruise SUNA calibration (tools/set_suna_calibration.py): derived from the cruise's bottles, kept with
 # the cruise data, not published. (No other rule covers a .json in metadata/.)
 cruises/*/metadata/suna_calibration.json
+# the synthetic example cruise states its own settings (Nov 2026); its data files are added with git add -f
+!cruises/_EXAMPLE/metadata/suna_calibration.json
+!cruises/_EXAMPLE/metadata/stations.csv
+!cruises/_TEMPLATE/metadata/stations_TEMPLATE.csv

@@ -272,5 +272,6 @@ def test_npq_risk_by_par_beside_the_daylight_rule(ctd):
     assert list(out["chl_npq_risk"]) == [True, True, True, False]               # unchanged
     assert (st.npq_bins_clock, st.npq_bins_par, st.npq_bins_agree, st.npq_bins_both_known) == (3, 1, 2, 4)
     assert any("they disagree on 2 bins" in n for n in st.notes)
-    out2, _ = g.grid_cast("C1", ctd[0], meta)                                    # no PAR sensor: not assessed
+    out2, st2 = g.grid_cast("C1", ctd[0], meta)                                  # no PAR sensor: not assessed
     assert out2["chl_npq_risk_par"].isna().all()
+    assert st2.npq_bins_clock == 3 and st2.npq_bins_both_known == 0             # the daylight rule still counted
