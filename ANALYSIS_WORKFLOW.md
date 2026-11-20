@@ -1,157 +1,123 @@
-# Analysis Workflow and FAQ
+# Analysis workflow and FAQ
 
-A task-oriented companion to `README.md`. The README is the reference manual (every parameter, every
-folder); this file answers "I have raw files, now what do I actually run, and what comes out?" and
-"I only care about one product, what is the shortest path?".
-
-Everything here assumes the same `CRUISE_ID` across the steps you run, and that you have followed the
-install and "before the first run" checklist in `README.md`.
+A task-oriented companion to `README.md`. The README is the reference (instruments, levels, every step, the
+run order); this file answers "I only want one product: what is the shortest path?" and the questions that come
+up when running a cruise. Use the same `CRUISE_ID` in every step.
 
 ---
 
 ## 1. The big picture
 
 ```text
-RAW FILES                     PROCESSING                         PRODUCTS
----------                     ----------                         --------
-CTD .hex + .xmlcon  ->  step01 (SBE chain)            ->  L1/CTD/*.cnv  (readable full cast)
-  (+ .afm bottles)                                         L2/CTD/.../*.cnv  (processed, 1 m + 1 s)
-                                                           L2/CTD/Bottle/*.btl  (bottle mode)
-
-SUNA raw .csv + .cal -> step00_suna, step01_suna (QA)  ->  suna_L1_clean flags (good/bad frames)
-                        step02 (merge on UTC time)     ->  L2/SUNA/*_SUNA_1s.csv
-                        step03 (Zheng nitrate QC)      ->  L3/<cast>_nitrate_QC.csv  (corrected nitrate)
-
-discrete bottles:
-  nitrate table       -> used by step03 (bottle bias)  ->  calibrated nitrate
-  extracted chl-a     -> step07 (chl calibration)      ->  L3/productivity/*  (calibrated chlorophyll)
-  Winkler oxygen      -> step07 (oxygen, when present)  ->  L3/productivity/*  (calibrated oxygen)
-
-from the products:    step04 (profiles), step05 (diagnostics), step06 (sections)
+RAW FILES                    PROCESSING                                  PRODUCTS
+CTD .hex + .xmlcon      ->   step01 (SBE chain)                     ->   L1/CTD stages, L3/CTD/CTD_1m_down
+  (+ .afm bottles)                                                       L2/CTD/Bottle/*.btl (bottle mode)
+SUNA frames + .cal      ->   SUNA step00, step01 (QA)               ->   L1/SUNA (suna_L1_clean per frame)
+                             step02 merge, SUNA step02 co-location  ->   L2/SUNA
+                             SUNA step04 (clock), step02b (response)->   metadata: time offsets, slow casts
+bottle nitrate          ->   SUNA step03 (homogeneous-layer fit)    ->   metadata/suna_calibration.json
+                             step03_nitrate_qc                      ->   L2/nitrate (production nitrate)
+extracted chl-a         ->   step07                                 ->   L2/productivity (calibrated chl)
+everything above        ->   step08                                 ->   L3/gridded (one table per cast)
+from the products:           step04 (profiles), step05 (diagnostics), step06 (sections)
 ```
 
-Two rules worth repeating: **Data Conversion (step01) writes L1; everything after writes L2 or L3**, and
-**step04 onward reads the products, not the raw files**, so the order matters.
+The README's section 4 gives the full order with the tool to run after each step.
 
 ---
 
-## 2. Stage by stage: what it needs, what it makes
+## 2. "I just want X": the shortest path
 
-| Step | You run | It needs | It produces |
-|------|---------|----------|-------------|
-| **step01** | `step01_run_sbe_processing_v2.py` (PyCharm, press Run) | `L0/CTD/*.hex`, `*.xmlcon`, the `psa/` chain; `.afm` for bottle mode | `L1/CTD/*.cnv`, `L2/CTD/<stage>/*.cnv` (incl. `CTD_1m_down`, `CTD_1s`), `.btl` in bottle mode, audit CSVs |
-| **step00_suna_inventory** | notebook | raw `L1/SUNA/*.csv`, the SUNA `.cal` | frame inventory + health summary in `_audit/suna/` |
-| **step01_suna_spectral_qc** | notebook | raw `L1/SUNA/*.csv` | `suna_L1_clean` per-frame flags (good vs bad spectra), QC summary in `_audit/suna/` |
-| **step02** | `step02_merge_ctd_suna.ipynb` | `L2/CTD/CTD_1s/*_1s.cnv`, `L1/SUNA/*.csv`, `suna_cast_map.csv`, the SUNA QC flags | `L2/SUNA/<cast>_SUNA_1s.csv` (CTD + SUNA on one 1 s UTC time base) |
-| **step03** | `step03_nitrate_qc.ipynb` | `L2/SUNA/<cast>_SUNA_1s.csv`, raw SUNA, the SUNA `.cal`, **bottle nitrate table** | `L3/<cast>_nitrate_QC.csv` (corrected nitrate), assessment tables in `_audit/` |
-| **step03_suna_bottle_calibration** | notebook (optional) | same bottle nitrate inputs | interactive SUNA bottle-bias calibration inspector (checks the step03 fit) |
-| **step04** | `step04_plot_profiles.ipynb` | `L2/CTD/CTD_1m_down/*.cnv` (+ `L3` for corrected nitrate) | per-cast and multi-cast profile `.png`, `<cast>_readable.csv` |
-| **step05** | `step05_profile_diagnostics.ipynb` | the 1 m downcast profiles (+ step02 for nitracline) | annotated multi-panel `.png`, `<cast>_diagnostics.txt`, `profile_diagnostics.csv` |
-| **step06** | `step06_hydrographic_sections.ipynb` | the 1 m downcast profiles, a **station coordinate table** (cast to lat/lon) + transect order | contoured section `.png` per variable |
-| **step07** | `step07_productivity_calibration.ipynb` | the 1 m downcast CTD (sensor channels), a **discrete chl-a table** (and/or **Winkler oxygen**) | `L3/productivity/*` calibrated product, fit tables + scatter in `_audit/productivity/` |
+### Calibrated nitrate profiles
 
-Discrete sample tables live per cruise under `cruises/<CRUISE_ID>/metadata/`:
-- `bottle_nitrate/` for nitrate (drives step03)
-- `chla/` for extracted chlorophyll-a (drives step07 chlorophyll)
-- `winkler_oxygen/` for Winkler oxygen (drives step07 oxygen, empty until P45_08)
-- `station_coords.csv` for the step06 section coordinates
+1. `step01` (the 1 s CTD time base and the 1 dbar bins).
+2. `suna/step01_suna_spectral_qc` (`suna/step00_suna_inventory` first for a health check).
+3. `step02_merge_ctd_suna` and `suna/step02_suna_colocation`.
+4. `suna/step04_suna_time_lag`: if the SUNA clock is off, `tools/set_suna_time_offset.py` and rerun step 3.
+5. `suna/step02b_suna_response_correction`, then `tools/set_suna_slow_casts.py`.
+6. The bottle table (`build_bottle_nitrate_table.py` with `.btl`, `build_bottle_table.py` without).
+7. `suna/step03_suna_bottle_calibration`, then state the calibration: `tools/set_suna_calibration.py <CRUISE> fit`,
+   or `adopted --a1 ... --a0 ... --source "..."` when the lag makes a fit through all bottles unsafe (P45_07).
+8. `step03_nitrate_qc`, then `step08_grid_l3` for the gridded profiles.
 
-To start a cruise, copy `cruises/_TEMPLATE/` to `cruises/<CRUISE_ID>/` and create its `L0/CTD` and `L0/SUNA` folders. Every step resolves these paths through `project_paths.py`, so the only per-cruise switch is `CRUISE_ID`.
+step03 stops if `suna_calibration.json` is missing: every cruise must state its calibration.
 
----
+### The chlorophyll calibration (no SUNA needed)
 
-## 3. "I just want X": the shortest path
+1. `step01`.
+2. Extracted chl-a in `metadata/chla/<CRUISE>_chla.csv` (template columns).
+3. `tools/make_stations_table.py <CRUISE> --write` (positions for the solar-time daylight test).
+4. `productivity/step07_productivity_calibration`.
 
-### I just want clean, calibrated nitrate profiles
-1. `step01` (produces the 1 s CTD needed for the SUNA merge, and the 1 m downcast for plotting)
-2. `step01_suna_spectral_qc` (flags bad SUNA frames; `step00_suna_inventory` first if you want a health check)
-3. `step02` (merge)
-4. Fill `metadata/bottle_nitrate/` with your lab nitrate, then `step03` (calibration + QC)
-5. `step04` for the figures
+You get the fit, every scan calibrated in `L2/productivity/`, and the fit table and scatter in
+`_audit/productivity/`. The default step07 (near-surface daytime bottles left out) is the one to report;
+`step07_noremoval` and `step07_npq_comparison` show the sensitivity to that choice, and step07 prints the fit under
+a PAR rule beside it.
 
-Without a bottle nitrate table, step03 still runs but `no3_qc` carries **no bottle correction**, so fill
-the table before you trust the numbers.
+### Physical profiles or sections (T, S, density, oxygen)
 
-### I just want the productivity (chlorophyll) calibration
-This path does **not** need SUNA at all.
-1. `step01` (you only need `L2/CTD/CTD_1m_down/*.cnv`, which carries the ECO fluorometer channel)
-2. Put your extracted chl-a samples in `metadata/chla/<CRUISE>_chla.csv`
-3. `step07_productivity_calibration.ipynb`
+1. `step01`.
+2. `step04` (profiles) and `step05` (diagnostics).
+3. `step06` for sections (needs `stations.csv` or the cruise's cast summary). step08 first if you want nitrate.
 
-You get the fit (`sensor = a + b * bottle`), the corrected chlorophyll product in `L3/productivity/`, and
-the fit statistics (offset, gain with 95 % CI, R2, RMSE raw vs corrected) in `_audit/productivity/`.
-Use `step07_noremoval` and `step07_npq_comparison` only if you want to see the near-surface
-non-photochemical-quenching sensitivity; the default `step07` (NPQ-flagged points excluded) is the one
-to report.
+### Winkler oxygen arrives
 
-### I just want physical profiles or sections (T, S, density, oxygen)
-1. `step01`
-2. `step04` (profiles) and/or `step05` (diagnostics)
-3. `step06` for cross-shelf sections (needs the station coordinate table)
-
-No SUNA, no bottles required.
-
-### I finally have Winkler oxygen (P45_08 onward)
-1. Drop the Winkler table into `metadata/winkler_oxygen/`
-2. In `step07`, enable the oxygen target (it is coded but dormant until the data exist)
-3. Re-run step07; you get the SBE 43 vs Winkler calibration with the same machinery as chlorophyll
+Put the table in `metadata/winkler_oxygen/` and rerun step07: the oxygen target activates when its file exists,
+with the same machinery as chlorophyll.
 
 ---
 
-## 4. FAQ
+## 3. FAQ
 
-**Do I need to run every step in order?**
-No, but each step reads the previous stage's output, so you cannot skip a dependency. step04 to step07
-read products, not raw files, so step01 must run first. step07 and the physical-profile steps do not need
-SUNA; the nitrate steps (step02, step03) do.
+**Which nitrate is the one to report?**
+`L2/nitrate/<cast>_nitrate_QC.csv` from `step03_nitrate_qc`, gridded by step08 into `L3/gridded/`. The
+`L2/SUNA_calibrated` product from `suna/step03_suna_bottle_calibration` is the cross-check (step04 still plots it;
+README, known gaps).
 
-**Do I need SUNA for the productivity calibration?**
-No. step07 calibrates the CTD-mounted sensors (ECO fluorometer, SBE 43) against discrete bottle samples.
-It only needs step01's 1 m downcast CTD and a discrete sample table.
+**Why do some gridded nitrate bins carry `nitrate_hyst_flag`?**
+The SUNA lags, so in the nitracline the down-cast reads low and the up-cast high. step08 compares the two legs at
+every bin and flags where they differ by more than 2 uM. The value is the down-cast; treat flagged bins as
+uncertain by about half the difference, and use the bottles there.
 
-**Where do my discrete (bottle) samples go?**
-Per cruise, under `cruises/<CRUISE_ID>/metadata/`: nitrate in `bottle_nitrate/`, extracted chlorophyll-a
-in `chla/`, Winkler oxygen in `winkler_oxygen/`, and step06 coordinates in `station_coords.csv`. The
-column templates (`*_TEMPLATE.csv`) show the expected columns. These data files are git-ignored; only the
-templates are tracked.
+**Fit or adopted calibration?**
+`fit` when the down- and up-casts agree well enough that bottles anywhere in the profile can be used (P45_06).
+`adopted` when the lag is large (P45_07): the gain then comes from the homogeneous layer, supported by step02b's
+lag-aware fits, and `source` records that.
 
-**What is the minimum I need for a usable nitrate product?**
-A bottle nitrate table. Without it, Stages 2 and 3 of the Zheng QC are skipped and `no3_qc` is
-uncorrected. The bottles are matched to SUNA frames by depth (within 2 m), not by a single cast timestamp.
+**Where do my discrete samples go?**
+`cruises/<CRUISE_ID>/metadata/`: nitrate in `bottle_nitrate/`, chlorophyll in `chla/`, Winkler oxygen in
+`winkler_oxygen/`. The `*_TEMPLATE.csv` files show the columns. A bottle you know is bad gets a reason in the `flag`
+column, which leaves it out of the fits; `build_bottle_table.py` carries those flags when it rebuilds the table.
 
-**Why does step04 show "Nitrate (corrected)" and not the raw SUNA nitrate?**
-step04 reads the corrected nitrate from the L3 QC product (`nitrate_corr_uM`), so the plotted profile is
-the bottle-calibrated one. Run step03 before step04 if you want that panel populated.
+**My bottles have no firing record.**
+Without `.afm`/`.btl` the depths are the sample sheet's targets. `build_bottle_table.py` reports where the CTD record
+shows the rosette held still against those depths (`STOP_DEPTHS = "report"`), and can use them (`"apply"`) when the
+holds are real bottle stops.
 
-**My ECO puck has flECO-AFL and flECO-AFL1. Which one is chlorophyll?**
-`flECO-AFL` is the live chlorophyll fluorescence channel. `flECO-AFL1` is an unused/dead slot on this
-instrument (its values are noise, correlation with the bottles ~0.2), so step07 uses `flECO-AFL`.
+**My ECO has `flECO-AFL` and `flECO-AFL1`. Which is chlorophyll?**
+`flECO-AFL`, the 470 nm channel, which step07 calibrates. On these cruises `flECO-AFL1` is most likely the 435 nm
+chlorophyll channel with a placeholder scale in the `.xmlcon`; `tools/inspect_eco_channels.py` shows how it
+behaves. It is not used.
 
 **Is the fluorometer measuring chlorophyll-a?**
-It measures in-vivo chlorophyll fluorescence, a proxy for chlorophyll-a, not the pigment concentration
-directly. That is exactly why step07 calibrates it against extracted (discrete) chlorophyll-a. Report it
-as calibrated fluorescence-based chlorophyll, and keep the accuracy hierarchy in mind
-(HPLC > extracted fluorometric > in-situ fluorescence).
+It measures in-vivo fluorescence, a proxy. step07 calibrates it against extracted chlorophyll-a, and only the
+calibrated value is chlorophyll. Values above the highest bottle in the fit carry `chl_above_cal`.
 
-**What is NPQ and which step07 result do I trust?**
-Non-photochemical quenching suppresses daytime near-surface fluorescence, so shallow daytime points read
-low. The default `step07` flags those points (shallower than 10 m, between 07:00 and 17:00) and excludes
-them from the fit. That is the result to report. `step07_noremoval` keeps them and
-`step07_npq_comparison` overlays both, for sensitivity only.
+**What is NPQ, and which flag do I use?**
+Non-photochemical quenching lowers daytime fluorescence near the surface. step07 leaves out bottles at 10 m or
+shallower between 07 and 17 local solar time. step08 carries that rule per bin (`chl_npq_risk`) and a light-based
+one (`chl_npq_risk_par`, PAR at least 100 umol photons m-2 s-1), which is the better guide in a given profile.
 
 **The SUNA file id does not match my cast id.**
-Map them in `cruises/<CRUISE>/metadata/suna_cast_map.csv` (`cast_id,suna_file`). step02 uses it; a
-filename fallback and an auto-proposed map exist if you do not fill it.
+Map them in `metadata/suna_cast_map.csv` (`cast_id,suna_file`); step02 proposes a map from time overlap.
 
 **Should I run step01 live the first time?**
-No. Start with `RUN_SBE_COMMANDS = False` (dry run, writes only the command plan), check
-`_audit/01_psa_diagnostic.csv` (every PSA should have an empty `warnings` column), then set it `True`.
+No: `RUN_SBE_COMMANDS = False` first, check `_audit/01_psa_diagnostic.csv`, then set it `True`.
 
-**Nothing changes when I re-run a step.**
-Check `CRUISE_ID` is the same everywhere, and that the previous stage actually wrote its output (the
-tables in Section 2 say what each step expects as input).
+**Nothing changes when I rerun a step.**
+Check `CRUISE_ID`, that the previous step wrote its output, and that you are not reading a per-cruise setting you
+meant to change (the files in `metadata/`; the `tools/set_suna_*.py` scripts show theirs with `--show`).
 
-**Will any of this commit my cruise data to git?**
-No. All raw and processed data, the PSAs, and the figures are git-ignored. Only code, docs, the small
-config files (`suna_cast_map.csv`, the calibration references) and the discrete-sample templates are
-tracked. See `.gitignore`.
+**Will any of this commit my cruise data?**
+No. Data, PSAs, figures, `_audit` and the per-cruise settings are git-ignored; only code, docs, the calibration
+references, `suna_cast_map.csv` and the templates are tracked.

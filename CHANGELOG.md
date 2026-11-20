@@ -1,7 +1,31 @@
 # Changelog
 
-All notable changes to this project are documented here. This project follows
-[Semantic Versioning](https://semver.org).
+All notable changes to this project are documented here. Releases up to 0.1.0 used semantic versioning;
+from November 2026 versions are calendar versions, `YYYY.M.D` (README, section 9).
+
+## [Unreleased] - Nov 2026
+
+### Changed
+- Data levels: calibrate and flag at native resolution (L2), grid once (L3); every folder defined in
+  `project_paths.py` and pinned by `tests/test_layout.py`; cruises moved with `tools/migrate_layout.py`.
+- SUNA Stage 3 calibration stated per cruise in `metadata/suna_calibration.json` (`fit` or `adopted`), clock
+  offsets in `suna_time_offsets.csv`, slow casts in `suna_response.csv`, each written by its tool.
+- Homogeneous-layer SUNA calibration needs 3 clean frames on each leg (P45_06: gain 0.877 to 0.862).
+- step07 applies the chlorophyll calibration to every scan; its printed inference no longer reads the gain as a
+  factory error (the ECO V2 sent Legacy counts the `.xmlcon` coefficients do not match).
+- step04's readable tables moved to `L3/CTD/profiles_readable`.
+
+### Added
+- step02b (SUNA response time and the lag-aware bottle test), SUNA step04 (clock lag), step08 (L3 gridding).
+- Per-bin down/up nitrate check in step08 (`nitrate_updown_uM`, `nitrate_hyst_flag`).
+- SUNA spectral QC: surface breaks inside the CTD's wet interval, out-of-water windows per cast.
+- Bottle pairing with hand flags and a temperature check; stop detection in the CTD record (`suncat.stops`).
+- `chl_above_cal` and `chl_cal_max`; NPQ by PAR beside the daylight rule (`chl_npq_risk_par`), and step07's
+  comparison fit under it.
+- Tools: `make_stations_table.py`, `inspect_eco_channels.py`, `make_synthetic_cruise.py`, `run_notebook.py`,
+  the `set_suna_*` scripts, response and lag diagnostics.
+- Docs: the instrument suite and its configuration, adapting the pipeline to other instruments, the two cruises'
+  results and open questions (`docs/VALIDATION.md`).
 
 ## [0.1.0] - 2026-10-27
 
