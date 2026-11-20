@@ -14,6 +14,9 @@ chlorophyll (flECO-AFL) and with beam attenuation (CStarAt0, particles), each al
 (partial). A second chlorophyll channel follows flECO-AFL once particles are held fixed; a backscatter channel
 follows CStarAt0 once chlorophyll is held fixed.
 
+Also counted: scans at 4130 counts on either channel, the full range of the ECO V2's Legacy (ECO Classic) output, which
+the CTD's serial port reads (manual, appendix A.3). A scan there is saturated, not a measurement.
+
     python tools\\inspect_eco_channels.py P45_06 [P45_07 ...]
 """
 from __future__ import annotations
@@ -31,6 +34,7 @@ from project_paths import product_dir  # noqa: E402
 from suncat.io.cnv import read_cnv  # noqa: E402
 
 MIN_DBAR = 3.0
+LEGACY_FULL = 4130.0                      # counts: full range of the Legacy output
 AFL = ("flECO-AFL", 7.345e-3, 54.0)       # column, scale, dark from the .xmlcon
 AFL1 = ("flECO-AFL1", 10.0, 55.0)
 CSTAR = "CStarAt0"
@@ -42,6 +46,12 @@ def counts(v, scale, dark):
 
 def _rank(x):
     return pd.Series(x).rank().to_numpy()
+
+
+def spearman(x, y):
+    """Rank correlation without scipy (pandas' method="spearman" imports it): Pearson r of the ranks."""
+    rx, ry = _rank(x), _rank(y)
+    return float(np.corrcoef(rx, ry)[0, 1]) if rx.std() > 0 and ry.std() > 0 else np.nan
 
 
 def partial_r(x, y, z):
@@ -72,15 +82,15 @@ def one_cast(path: Path) -> dict:
     r.update(n=int(ok.sum()), afl1_counts_min=float(np.min(c1)) if c1.size else np.nan,
              afl1_counts_med=float(np.median(c1)) if c1.size else np.nan,
              afl1_counts_max=float(np.max(c1)) if c1.size else np.nan,
-             afl1_below_50=int((c1 < 50).sum()), afl1_unique=int(np.unique(np.round(c1, 3)).size))
+             afl1_below_50=int((c1 < 50).sum()), afl1_unique=int(np.unique(np.round(c1, 3)).size),
+             afl_saturated=int((c0 >= LEGACY_FULL - 0.5).sum()), afl1_saturated=int((c1 >= LEGACY_FULL - 0.5).sum()))
     if r["afl1_unique"] <= 1:
         r["note"] = "flat"
         return r
     if c1.size < 20:
         r["note"] = "too few scans"
         return r
-    r.update(r_chl470=float(pd.Series(c1).corr(pd.Series(c0), method="spearman")),
-             r_cstar=float(pd.Series(c1).corr(pd.Series(cs), method="spearman")),
+    r.update(r_chl470=spearman(c1, c0), r_cstar=spearman(c1, cs),
              r_chl470_given_cstar=partial_r(c1, c0, cs), r_cstar_given_chl470=partial_r(c1, cs, c0),
              note="")
     return r
